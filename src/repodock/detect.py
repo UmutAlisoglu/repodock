@@ -67,12 +67,44 @@ def _read(path: Path, limit: int = 400_000) -> str:
 
 
 def _toml(path: Path) -> dict:
+    text = _read(path)
     if tomllib is None:
-        return {}
+        return _mini_toml(text)
     try:
-        return tomllib.loads(_read(path))
+        return tomllib.loads(text)
     except (ValueError, tomllib.TOMLDecodeError):  # type: ignore[union-attr]
         return {}
+
+
+def _mini_toml(text: str) -> dict:
+    """Enough TOML for Python < 3.11: tables, string values and string arrays."""
+    data: dict = {}
+    table = data
+    lines = iter(text.splitlines())
+    for line in lines:
+        line = line.split(" #", 1)[0].strip()
+        if not line or line.startswith("#"):
+            continue
+        header = re.fullmatch(r"\[([A-Za-z0-9_.\-\"' ]+)\]", line)
+        if header:
+            table = data
+            for part in (p.strip().strip("\"'") for p in header.group(1).split(".")):
+                table = table.setdefault(part, {})
+            continue
+        m = re.fullmatch(r"([A-Za-z0-9_\-\"'.]+)\s*=\s*(.*)", line)
+        if not m:
+            continue
+        key, value = m.group(1).strip("\"'"), m.group(2).strip()
+        if value.startswith("[") and not value.endswith("]"):
+            for more in lines:
+                value += " " + more.split(" #", 1)[0].strip()
+                if value.rstrip().endswith("]"):
+                    break
+        if value.startswith("["):
+            table[key] = [a or b for a, b in re.findall(r"\"((?:[^\"\\]|\\.)*)\"|'([^']*)'", value)]
+        elif value[:1] in "\"'":
+            table[key] = value[1:].split(value[0], 1)[0]
+    return data
 
 
 def _find(root: Path, pattern: str, depth: int = 2) -> list[Path]:
