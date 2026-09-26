@@ -4,7 +4,8 @@ Commands are shell strings the user can edit. They may contain placeholders
 that are filled in when the command runs (see ``expand``):
 
   {python}         the repo's .venv Python if it exists, else the Python running repodock
-  {system_python}  the Python running repodock
+  {system_python}  the Python running repodock (in the Windows build: Python from PATH)
+  {repodock}       repodock itself, e.g. to serve a static site
   {venv_python}    the repo's .venv Python
   {venv_bin}       the repo's .venv scripts folder
   {port}           a free port on this machine
@@ -341,7 +342,7 @@ def _static(root: Path, win: bool) -> list[Candidate]:
     for folder in ("", "public", "docs", "site", "dist", "build", "www"):
         if (root / folder / "index.html").is_file():
             target = folder or "."
-            return [Candidate("Static website", f"{{system_python}} -m http.server {{port}} --bind 127.0.0.1 --directory {q(target)}", "static", url="http://localhost:{port}/")]
+            return [Candidate("Static website", f"{{repodock}} static {q(target)} --port {{port}}", "static", url="http://localhost:{port}/")]
     return []
 
 
@@ -360,10 +361,35 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
+def frozen() -> bool:
+    """True in the standalone Windows build, where sys.executable is repodock.exe, not Python."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def system_python() -> str | None:
+    """A Python to create project virtual environments with, or None if there is none."""
+    if not frozen():
+        return sys.executable
+    for name in ("python", "python3"):
+        path = shutil.which(name)
+        # Windows ships a "python.exe" stub in WindowsApps that only opens the Microsoft Store.
+        if path and "windowsapps" not in path.lower():
+            return path
+    launcher = shutil.which("py")
+    return f"{launcher} -3" if launcher else None
+
+
+def repodock_command() -> str:
+    """How to start repodock itself (used to serve static sites)."""
+    return q(sys.executable) if frozen() else f"{q(sys.executable)} -m repodock"
+
+
 def expand(command: str, root: Path, port: int | str | None = None, platform: str | None = None, assume_venv: bool = False) -> str:
     venv_python, venv_bin = venv_paths(platform)
-    system = q(sys.executable)
+    found = system_python()
+    system = (q(found) if found and not found.endswith(" -3") else found) or "python"
     values = {
+        "repodock": repodock_command(),
         "system_python": system,
         "venv_python": venv_python,
         "venv_bin": venv_bin,
@@ -378,6 +404,8 @@ def expand(command: str, root: Path, port: int | str | None = None, platform: st
 
 def missing_tool(candidate: Candidate) -> str | None:
     """Human name of a required program that isn't installed, if any."""
+    if candidate.kind == "python" and system_python() is None:
+        return "Python"
     if candidate.tool and not shutil.which(candidate.tool):
         return TOOL_NAMES.get(candidate.tool, candidate.tool)
     return None

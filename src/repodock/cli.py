@@ -39,6 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     det = sub.add_parser("detect", parents=[common], help="show how repodock would run a folder")
     det.add_argument("path", nargs="?", default=".")
+
+    # Used by the "Static website" run command, so it works without a separate Python.
+    static = sub.add_parser("static")
+    static.add_argument("folder")
+    static.add_argument("--port", type=int, default=8000)
     _serve_args(p)
     return p
 
@@ -63,6 +68,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if command == "detect":
             return cmd_detect(args)
+        if command == "static":
+            return cmd_static(args)
         dock = make_dock(args)
         if command == "add":
             return cmd_add(dock, args)
@@ -96,6 +103,8 @@ def cmd_serve(dock: Dock, args) -> int:
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGTERM, on_term)
+    if hasattr(signal, "SIGBREAK"):  # Windows: Ctrl+Break, and closing the console window
+        signal.signal(signal.SIGBREAK, on_term)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -152,6 +161,25 @@ def cmd_list(dock: Dock) -> int:
     for r in repos:
         cmd = r.get("command") or "(no run command found)"
         print(f"{r['key']:<40} {r.get('status', ''):<8} {cmd}")
+    return EXIT_OK
+
+
+def cmd_static(args) -> int:
+    import functools
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+    folder = Path(args.folder)
+    if not folder.is_dir():
+        print(f"repodock: {folder} is not a folder", file=sys.stderr)
+        return EXIT_ERROR
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), functools.partial(SimpleHTTPRequestHandler, directory=str(folder)))
+    print(f"Serving {folder} at http://localhost:{server.server_address[1]}/", flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
     return EXIT_OK
 
 

@@ -184,3 +184,33 @@ class DockTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StaticSiteTests(unittest.TestCase):
+    def test_serves_a_static_site(self):
+        import urllib.request
+        tmp = TempDir()
+        gh = FakeGitHub()
+        try:
+            gh.repos["octo/site"] = repo_json("octo/site", language="HTML")
+            make_remote(tmp.path / "remotes", "octo/site", {"public/index.html": "<h1>static ok</h1>"})
+            dock = Dock(Store(tmp.path / "dock"), GitHub(None, gh.url), git_base=str(tmp.path / "remotes"))
+            key = dock.add("octo/site")["key"]
+            wait_for(lambda: dock.store.get(key)["status"] == "ready")
+            self.assertEqual(dock.run(key, confirmed=True), {"started": "run"})
+            job = dock.runner.job(key)
+            self.assertRegex(job.url, r"^http://localhost:\d+/$")
+
+            def page():
+                try:
+                    with urllib.request.urlopen(job.url.replace("localhost", "127.0.0.1"), timeout=2) as resp:
+                        return b"static ok" in resp.read()
+                except OSError:
+                    return False
+
+            wait_for(page, 30, 0.2)
+            dock.runner.stop_all()
+            wait_for(lambda: not job.running, 15)
+        finally:
+            gh.close()
+            tmp.cleanup()

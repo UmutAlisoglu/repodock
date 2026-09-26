@@ -12,7 +12,26 @@ Works on Windows, macOS and Linux. Pure Python, no dependencies.
 
 ![repodock with four projects, one running and one showing its output](docs/dashboard.png)
 
-## Install
+## Download for Windows
+
+**[Download repodock-setup.exe](https://github.com/UmutAlisoglu/repodock/releases/latest/download/repodock-setup.exe)**,
+double-click it and click through the installer. No Python or admin rights
+needed. It adds repodock to the Start Menu (and the desktop, if you tick the
+box) and can be removed from Windows Settings > Apps like any other program.
+
+- Windows may say "Windows protected your PC" because the installer isn't
+  signed. Click **More info**, then **Run anyway**.
+- Starting repodock opens a small black window and the dashboard in your
+  browser. Close the window to stop repodock and everything it started.
+- Rather not install anything? Download
+  [repodock-windows-portable.zip](https://github.com/UmutAlisoglu/repodock/releases/latest/download/repodock-windows-portable.zip),
+  unzip it anywhere and double-click `repodock.exe`.
+- repodock itself needs nothing else, but projects do: a Python project needs
+  [Python](https://www.python.org/downloads/), a Node.js project needs
+  [Node.js](https://nodejs.org/), and so on. The card tells you when something
+  is missing. [Git](https://git-scm.com/downloads) is optional.
+
+## Install with pipx (macOS, Linux, Windows)
 
 ```console
 pipx install git+https://github.com/UmutAlisoglu/repodock

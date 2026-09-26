@@ -100,7 +100,7 @@ class DetectTests(unittest.TestCase):
 
     def test_static_site(self):
         c = self.first({"docs/index.html": "<h1>hi</h1>"})
-        self.assertIn("-m http.server {port} --bind 127.0.0.1 --directory docs", c.command)
+        self.assertEqual(c.command, "{repodock} static docs --port {port}")
 
     def test_order_prefers_the_app_over_docker(self):
         found = detect(self.repo({"package.json": json.dumps({"scripts": {"dev": "vite"}}), "Dockerfile": "", "index.html": ""}), "linux")
@@ -117,7 +117,7 @@ class ExpandTests(unittest.TestCase):
             root = tmp.path
             out = expand("{python} a.py --port {port}", root, 1234, "linux")
             self.assertTrue(out.endswith("a.py --port 1234"))
-            self.assertNotIn(".venv", out)
+            self.assertFalse(out.startswith(".venv"))
             (root / ".venv/bin").mkdir(parents=True)
             (root / ".venv/bin/python").write_text("")
             self.assertEqual(expand("{python} a.py", root, platform="linux"), ".venv/bin/python a.py")
@@ -133,3 +133,41 @@ class ExpandTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FrozenBuildTests(unittest.TestCase):
+    """The Windows build runs as repodock.exe, so Python must come from PATH."""
+
+    def setUp(self):
+        import repodock.detect as d
+        self.d = d
+        self.saved = (getattr(d.sys, "frozen", None), d.shutil.which)
+
+    def tearDown(self):
+        frozen, which = self.saved
+        if frozen is None:
+            self.d.sys.__dict__.pop("frozen", None)
+        else:
+            self.d.sys.frozen = frozen
+        self.d.shutil.which = which
+
+    def use(self, paths):
+        self.d.sys.frozen = True
+        self.d.shutil.which = lambda name: paths.get(name)
+
+    def test_python_from_path_skips_the_store_stub(self):
+        self.use({"python": r"C:\Users\me\AppData\Local\Microsoft\WindowsApps\python.exe", "py": r"C:\Windows\py.exe"})
+        self.assertEqual(self.d.system_python(), r"C:\Windows\py.exe -3")
+        self.use({"python": r"C:\Program Files\Python312\python.exe"})
+        self.assertEqual(self.d.expand("{system_python} -m venv .venv", Path(".")), r'"C:\Program Files\Python312\python.exe" -m venv .venv')
+
+    def test_no_python_is_reported(self):
+        self.use({})
+        self.assertIsNone(self.d.system_python())
+        c = self.d.Candidate("python main.py", "{python} main.py", "python")
+        self.assertEqual(self.d.missing_tool(c), "Python")
+
+    def test_static_site_uses_repodock_itself(self):
+        self.use({})
+        self.assertTrue(self.d.expand("{repodock} static .", Path(".")).endswith(" static ."))
+        self.assertNotIn("-m repodock", self.d.expand("{repodock} static .", Path(".")))
