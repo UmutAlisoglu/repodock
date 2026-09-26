@@ -208,9 +208,14 @@ class StaticSiteTests(unittest.TestCase):
                 except OSError:
                     return False
 
-            wait_for(page, 30, 0.2)
+            try:
+                wait_for(page, 30, 0.2)
+            except AssertionError:
+                log = "\n".join(line for _, line in job.output())
+                self.fail(f"static site never answered at {job.url}\ncommand: {job.command}\nrunning: {job.running}\n{log}")
             dock.runner.stop_all()
             wait_for(lambda: not job.running, 15)
         finally:
+            dock.runner.stop_all()
             gh.close()
             tmp.cleanup()
