@@ -166,13 +166,15 @@ def cmd_list(dock: Dock) -> int:
 
 def cmd_static(args) -> int:
     import functools
-    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+    from http.server import SimpleHTTPRequestHandler
+
+    from .server import LocalServer
 
     folder = Path(args.folder)
     if not folder.is_dir():
         print(f"repodock: {folder} is not a folder", file=sys.stderr)
         return EXIT_ERROR
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), functools.partial(SimpleHTTPRequestHandler, directory=str(folder)))
+    server = LocalServer(("127.0.0.1", args.port), functools.partial(SimpleHTTPRequestHandler, directory=str(folder)))
     print(f"Serving {folder} at http://localhost:{server.server_address[1]}/", flush=True)
     try:
         server.serve_forever()

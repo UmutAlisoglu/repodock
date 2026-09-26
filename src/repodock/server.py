@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import sys
 import urllib.parse
+import socketserver
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .app import Dock, DockError
@@ -111,7 +112,22 @@ ACTIONS = {
 }
 
 
+class LocalServer(ThreadingHTTPServer):
+    """A threaded HTTP server on 127.0.0.1.
+
+    HTTPServer.server_bind looks up the host's full name, which can hang for
+    half a minute on macOS; a local server doesn't need it.
+    """
+
+    daemon_threads = True
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "localhost"
+        self.server_port = self.server_address[1]
+
+
 def make_server(dock: Dock, port: int, verbose: bool = False) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(dock, verbose))
+    server = LocalServer(("127.0.0.1", port), make_handler(dock, verbose))
     server.daemon_threads = True
     return server
