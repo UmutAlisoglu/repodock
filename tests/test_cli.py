@@ -64,6 +64,28 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, EXIT_ERROR)
         self.assertIn("github.com", err)
 
+    def test_second_launch_uses_the_running_one(self):
+        import threading
+
+        from repodock.app import Dock
+        from repodock.github import GitHub
+        from repodock.server import make_server
+        from repodock.store import Store
+
+        root = self.tmp.path / "dock"
+        dock = Dock(Store(root), GitHub(None, self.gh.url))
+        server = make_server(dock, 0)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            dock.store.data_dir.mkdir(parents=True, exist_ok=True)
+            (dock.store.data_dir / "instance.json").write_text(json.dumps({"port": server.server_address[1], "pid": 1}))
+            code, _, err = run("--dir", str(root), "--no-open")
+            self.assertEqual(code, EXIT_OK)
+            self.assertIn("already running", err)
+        finally:
+            server.shutdown()
+            server.server_close()
+
 
 if __name__ == "__main__":
     unittest.main()

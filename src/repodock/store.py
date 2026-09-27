@@ -10,6 +10,17 @@ import time
 from pathlib import Path
 
 STATE_FILE = ".repodock.json"
+DATA_DIR = ".repodock"  # logs and downloaded releases
+DEFAULT_SETTINGS = {
+    "theme": "system",  # system, light, dark
+    "accent": "#0f766e",
+    "view": "grid",  # grid, list
+    "group": "none",  # owner, none (owners are also in the sidebar)
+    "sort": "name",  # name, recent, favorite
+    "notify": True,  # tell me when an app crashes
+    "check_updates": True,  # look for new commits in the background
+    "close_to_tray": True,
+}
 
 
 def default_root() -> Path:
@@ -38,7 +49,30 @@ class Store:
             data = {}
         data.setdefault("version", 1)
         data.setdefault("repos", {})
+        data.setdefault("settings", {})
         return data
+
+    @property
+    def data_dir(self) -> Path:
+        return self.root / DATA_DIR
+
+    def settings(self) -> dict:
+        with self.lock:
+            return {**DEFAULT_SETTINGS, **self.data["settings"]}
+
+    def set_settings(self, **fields) -> dict:
+        with self.lock:
+            for name, value in fields.items():
+                if name not in DEFAULT_SETTINGS:
+                    raise KeyError(name)
+                default = DEFAULT_SETTINGS[name]
+                if isinstance(default, bool):
+                    value = bool(value)
+                elif not isinstance(value, str) or len(value) > 40:
+                    raise ValueError(f"bad value for {name}")
+                self.data["settings"][name] = value
+            self.save()
+            return self.settings()
 
     def save(self) -> None:
         with self.lock:

@@ -84,6 +84,34 @@ class ServerTests(unittest.TestCase):
         status, _ = self.call("GET", "/api/state", None, {"Host": f"127.0.0.1:{self.port}"})
         self.assertEqual(status, 200)
 
+    def test_new_routes(self):
+        status, ping = self.call("GET", "/api/ping")
+        self.assertEqual((status, ping["app"]), (200, "repodock"))
+        status, res = self.call("POST", "/api/settings", {"changes": {"theme": "dark"}})
+        self.assertEqual(res["settings"]["theme"], "dark")
+        status, res = self.call("POST", "/api/settings", {"changes": {"theme": 5}})
+        self.assertEqual(status, 400)
+        self.call("POST", "/api/add", {"input": "octo/app"})
+        wait_for(lambda: self.call("GET", "/api/state")[1]["repos"][0]["status"] == "ready")
+        status, _ = self.call("POST", "/api/configure", {"key": "octo/app", "fields": {"tags": ["x"]}})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.call("GET", "/api/state")[1]["repos"][0]["tags"], ["x"])
+        status, res = self.call("POST", "/api/configure", {"key": "octo/app", "fields": {"port": "abc"}})
+        self.assertEqual(status, 400)
+        status, res = self.call("POST", "/api/set-env", {"key": "octo/app", "vars": [["A", "1"]]})
+        self.assertEqual(self.call("POST", "/api/env", {"key": "octo/app"})[1]["vars"], [["A", "1"]])
+        status, library = self.call("GET", "/api/export")
+        self.assertEqual(library["repos"][0]["full_name"], "octo/app")
+        status, res = self.call("POST", "/api/releases", {"key": "octo/app"})
+        self.assertEqual(res, {"releases": []})
+        status, res = self.call("POST", "/api/quit", {})
+        self.assertEqual(status, 400)  # only the app window can quit itself
+        self.assertEqual(self.call("POST", "/api/show", {})[1], {"shown": False})
+        status, res = self.call("POST", "/api/open-url", {"url": "file:///etc/passwd"})
+        self.assertEqual(status, 400)
+        status, res = self.call("POST", "/api/stop-all", {})
+        self.assertEqual(res, {"stopped": 0})
+
 
 if __name__ == "__main__":
     unittest.main()

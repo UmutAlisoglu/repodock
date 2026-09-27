@@ -88,6 +88,9 @@ class FakeGitHub:
         self.repos: dict[str, dict] = {}
         self.zips: dict[str, bytes] = {}
         self.user_lists: dict[str, list] = {}
+        self.releases: dict[str, list] = {}  # full name -> release JSON (see add_release)
+        self.files: dict[str, bytes] = {}  # /download/<name> -> content
+        self.search_results: list[dict] = []
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -117,9 +120,24 @@ class FakeGitHub:
                 return 200, self.repos[full], j
             if len(parts) >= 4 and parts[3] == "zipball" and full in self.zips:
                 return 200, self.zips[full], "application/zip"
+            if len(parts) == 4 and parts[3] == "releases" and full in self.repos:
+                return 200, self.releases.get(full, []), j
+        if parts[0] == "download" and len(parts) == 2 and parts[1] in self.files:
+            return 200, self.files[parts[1]], "application/octet-stream"
+        if parts == ["search", "repositories"]:
+            return 200, {"total_count": len(self.search_results), "items": self.search_results}, j
         if parts[0] == "users" and len(parts) == 3 and parts[2] == "repos" and parts[1] in self.user_lists:
             return 200, self.user_lists[parts[1]], j
         return 404, {"message": "Not Found"}, j
+
+    def add_release(self, full_name: str, tag: str, files: dict[str, bytes], prerelease=False):
+        assets = []
+        for name, data in files.items():
+            self.files[name] = data
+            assets.append({"name": name, "size": len(data), "download_count": 1, "url": f"{self.url}/assets/{name}",
+                           "browser_download_url": f"{self.url}/download/{name}"})
+        self.releases.setdefault(full_name, []).insert(0, {"tag_name": tag, "name": f"Version {tag}", "published_at": "2026-09-20T00:00:00Z",
+                                                           "prerelease": prerelease, "draft": False, "html_url": "", "assets": assets})
 
     def close(self):
         self.server.shutdown()

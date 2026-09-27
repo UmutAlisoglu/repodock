@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import platform as platform_mod
 import re
 import shutil
 import subprocess
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -86,7 +88,8 @@ def find_token() -> str | None:
             return os.environ[name]
     if shutil.which("gh"):
         try:
-            proc = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, timeout=10)
+            proc = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, timeout=10,
+                                  creationflags=0x08000000 if sys.platform.startswith("win") else 0)
         except (OSError, subprocess.TimeoutExpired):
             return None
         if proc.returncode == 0 and proc.stdout.strip():
@@ -100,18 +103,20 @@ class GitHub:
         self.base = base.rstrip("/")
         self.timeout = timeout
 
-    def request(self, path: str, **params: Any) -> urllib.request.Request:
+    def request(self, path: str, _accept: str = "application/vnd.github+json", **params: Any) -> urllib.request.Request:
         url = path if path.startswith("http") else self.base + path
         if params:
             url += ("&" if "?" in url else "?") + urllib.parse.urlencode(params)
-        headers = {"Accept": "application/vnd.github+json", "User-Agent": f"repodock/{__version__}", "X-GitHub-Api-Version": "2022-11-28"}
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
-        return urllib.request.Request(url, headers=headers)
+        headers = {"Accept": _accept, "User-Agent": f"repodock/{__version__}", "X-GitHub-Api-Version": "2022-11-28"}
+        req = urllib.request.Request(url, headers=headers)
+        if self.token and (not path.startswith("http") or url.startswith(self.base)):
+            # Not forwarded on redirects: release downloads redirect to a signed storage URL.
+            req.add_unredirected_header("Authorization", f"Bearer {self.token}")
+        return req
 
-    def open(self, path: str, **params: Any):
+    def open(self, path: str, _accept: str = "application/vnd.github+json", **params: Any):
         try:
-            return urllib.request.urlopen(self.request(path, **params), timeout=self.timeout)
+            return urllib.request.urlopen(self.request(path, _accept, **params), timeout=self.timeout)
         except urllib.error.HTTPError as exc:
             message = ""
             try:
@@ -149,6 +154,12 @@ class GitHub:
             page += 1
         return found
 
+    def releases(self, full_name: str, limit: int = 10) -> list[dict]:
+        return self.get(f"/repos/{full_name}/releases", per_page=limit)
+
+    def search(self, query: str, limit: int = 20) -> dict:
+        return self.get("/search/repositories", q=query, per_page=limit)
+
     def viewer(self) -> str | None:
         if not self.token:
             return None
@@ -156,6 +167,57 @@ class GitHub:
             return self.get("/user").get("login")
         except GitHubError:
             return None
+
+
+# Release files worth offering, per platform, best first.
+ASSET_KINDS = {
+    "win": (".exe", ".msi", ".zip"),
+    "darwin": (".dmg", ".pkg", ".zip", ".tar.gz"),
+    "linux": (".appimage", ".deb", ".rpm", ".tar.gz", ".tgz", ".zip"),
+}
+OTHER_OS = {
+    "win": ("mac", "darwin", "osx", "linux", "ubuntu", "debian", "appimage"),
+    "darwin": ("win", "windows", "linux", "ubuntu", "debian", ".exe", ".msi"),
+    "linux": ("win", "windows", "mac", "darwin", "osx", ".exe", ".msi", ".dmg"),
+}
+
+
+def platform_key(platform: str | None = None) -> str:
+    p = platform or sys.platform
+    return "win" if p.startswith("win") else "darwin" if p == "darwin" else "linux"
+
+
+def asset_fit(name: str, platform: str | None = None) -> int:
+    """How well a release file suits this computer: 0 = not at all, higher is better."""
+    key = platform_key(platform)
+    lower = name.lower()
+    kinds = ASSET_KINDS[key]
+    kind = next((i for i, ext in enumerate(kinds) if lower.endswith(ext)), None)
+    if kind is None:
+        return 0
+    words = re.split(r"[^a-z0-9]+", lower)
+    if any(w in words or (w.startswith(".") and lower.endswith(w)) for w in OTHER_OS[key]):
+        return 0
+    score = 10 - kind
+    mine = {"win": ("win", "windows", "win64", "x64"), "darwin": ("mac", "macos", "darwin", "osx", "universal"),
+            "linux": ("linux", "x86_64", "amd64", "x64")}[key]
+    if any(w in words for w in mine):
+        score += 5
+    if any(w in words for w in ("arm64", "aarch64", "arm")) and "arm" not in platform_mod.machine().lower():
+        score -= 4
+    if any(w in words for w in ("src", "source", "sources")):
+        return 0
+    return max(score, 1)
+
+
+def summarize_release(rel: dict, platform: str | None = None) -> dict:
+    assets = []
+    for a in rel.get("assets") or []:
+        assets.append({"name": a["name"], "size": a.get("size") or 0, "downloads": a.get("download_count") or 0,
+                       "url": a.get("browser_download_url"), "api_url": a.get("url"), "fit": asset_fit(a["name"], platform)})
+    assets.sort(key=lambda a: -a["fit"])
+    return {"tag": rel.get("tag_name"), "name": rel.get("name") or rel.get("tag_name"), "published_at": rel.get("published_at"),
+            "prerelease": bool(rel.get("prerelease")), "draft": bool(rel.get("draft")), "url": rel.get("html_url"), "assets": assets}
 
 
 def summarize(repo: dict) -> dict:

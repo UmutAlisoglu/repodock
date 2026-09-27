@@ -4,13 +4,47 @@
 
 Trying out a project from GitHub usually means cloning it, reading the README to
 work out how to start it, installing its dependencies and keeping a terminal
-open. repodock does that from one page in your browser: paste a link (or a
-username to pick from all their repositories), and each project gets a card with
-its detected run command, a Run/Stop button, live output, and buttons to update,
-open or delete it. It never installs or runs anything without asking first.
-Works on Windows, macOS and Linux. Pure Python, no dependencies.
+open. repodock does that from one window: paste a link (or a username to pick
+from all their repositories), and each project gets a card with its detected run
+command, a Run/Stop button, live output with CPU and memory use, and buttons to
+update, configure or delete it. It never installs or runs anything without
+asking first. Works on Windows, macOS and Linux.
 
-![repodock with four projects, one running and one showing its output](docs/dashboard.png)
+![repodock with five projects, one running with its CPU and memory use](docs/dashboard.png)
+
+## What it does
+
+- **Its own app window** on Windows (Edge WebView2), with a tray icon: closing
+  the window keeps your apps running, and the tray menu stops them or quits.
+  Starting repodock again brings the open window to the front. It can start
+  with Windows, minimised to the tray.
+- **Runs almost anything**: Node.js, Python, Go, Rust, .NET, Java, Docker,
+  Makefiles, Windows programs and static websites (see the table below), or a
+  ready-made program from the project's **GitHub Releases**.
+- **Live stats** per running app: CPU, memory (the whole process tree),
+  uptime, and an **Open in browser** button as soon as the app prints a
+  localhost address. **Stop all** in one click.
+- **Per-project settings**: a fixed port, a `.env` editor (values hidden until
+  you show them), and your own buttons like Build or Test.
+- **Updates**: badges like "3 new commits" (checked with `git fetch` every 30
+  minutes) and **Update all**.
+- **Missing tools**: when a project needs Node.js, Python, Go, Rust, .NET,
+  Java or Docker and it isn't installed, the card says so and offers the
+  `winget` command to install it, which runs only when you confirm.
+- **Crash notices** with optional auto-restart, and the **logs of the last
+  five runs** of each project, searchable.
+- **Disk use** per project and **Free up space**, which removes
+  `node_modules`, `.venv` and ignored build output.
+- **Your way**: light, dark or system theme, accent colour, cards or list,
+  favourites, tags, owners with their avatars, and **GitHub search** inside the
+  app.
+- **Keyboard**: <kbd>Ctrl</kbd>+<kbd>K</kbd> jumps to any project
+  (<kbd>Shift</kbd>+<kbd>Enter</kbd> runs it), <kbd>/</kbd> filters, <kbd>?</kbd>
+  lists the rest.
+- **Export and import** your library (projects, commands, tags and settings,
+  not `.env` secrets) to move to another computer.
+
+![The same projects as a list, in dark mode](docs/list-dark.png)
 
 ## Download for Windows
 
@@ -21,11 +55,15 @@ box) and can be removed from Windows Settings > Apps like any other program.
 
 - Windows may say "Windows protected your PC" because the installer isn't
   signed. Click **More info**, then **Run anyway**.
-- Starting repodock opens a small black window and the dashboard in your
-  browser. Close the window to stop repodock and everything it started.
+- repodock opens in its own window. Closing it keeps repodock (and the apps
+  you started) running in the tray, next to the clock; right-click the icon
+  and choose **Quit repodock** to stop everything.
 - Rather not install anything? Download
   [repodock-windows-portable.zip](https://github.com/UmutAlisoglu/repodock/releases/latest/download/repodock-windows-portable.zip),
-  unzip it anywhere and double-click `repodock.exe`.
+  unzip it anywhere and double-click `repodock.exe`. `repodock-cli.exe` next
+  to it is the command-line version.
+- The window uses Microsoft Edge WebView2, which comes with Windows 10 and 11.
+  If it's missing, repodock opens in your browser instead.
 - repodock itself needs nothing else, but projects do: a Python project needs
   [Python](https://www.python.org/downloads/), a Node.js project needs
   [Node.js](https://nodejs.org/), and so on. The card tells you when something
@@ -36,6 +74,18 @@ box) and can be removed from Windows Settings > Apps like any other program.
 ```console
 pipx install git+https://github.com/UmutAlisoglu/repodock
 ```
+
+That's pure Python with no dependencies, and it opens the dashboard in your
+browser. For the app window and tray icon, add the optional `app` extra, which
+installs [pywebview](https://pywebview.flowrl.com/) (plus pystray and Pillow
+for the tray icon on Windows):
+
+```console
+pipx install "repodock[app] @ git+https://github.com/UmutAlisoglu/repodock"
+```
+
+On macOS and Linux the window works when pywebview has a GUI backend (Cocoa,
+or GTK/Qt); there's no tray icon there, so closing the window quits.
 
 On Windows, install [Python](https://www.python.org/downloads/) first (tick
 "Add python.exe to PATH"), then in PowerShell:
@@ -55,7 +105,9 @@ repodock downloads zip archives instead.
 repodock
 ```
 
-This opens the dashboard at http://localhost:8766. Paste any of these into the box:
+This opens the dashboard in its own window, or in the browser at
+http://localhost:8766 (with `--browser`, or when the window isn't available).
+Paste any of these into the box:
 
 - `https://github.com/owner/project` (also `.git` links, `/tree/branch` links and `git@github.com:` links)
 - `owner/project`
@@ -68,6 +120,8 @@ on the page. Other commands:
 
 ```console
 repodock --dir D:\Projects        # keep projects somewhere else (or set REPODOCK_DIR)
+repodock --browser                # use the browser instead of the app window
+repodock --minimized              # start in the tray
 repodock --port 9000 --no-open
 repodock add owner/project        # download from the terminal
 repodock add owner --all          # every repository of a user, except forks and archived ones
@@ -106,7 +160,8 @@ the card says so.
 ### Nothing runs without your say-so
 
 - The first time you run a project, and whenever its command changes, repodock
-  shows the exact command before anything runs.
+  shows the exact command before anything runs. The same goes for your own
+  command buttons, programs downloaded from Releases and `winget` installs.
 - Dependencies are never installed automatically. If a project needs them,
   you choose between **Install and run**, **Run without installing** or
   **Cancel**, and you see the exact install command. Python dependencies go into
@@ -114,10 +169,18 @@ the card says so.
 - Projects from other people get a clear warning: their code runs with your
   permissions, so only run what you trust.
 - **Stop** ends the whole process tree (for example npm and the node server it
-  started), on Windows too. Stopping repodock with Ctrl+C stops everything it started.
+  started), on Windows too. Quitting repodock (tray menu, Settings, or Ctrl+C
+  in a terminal) stops everything it started.
 - The dashboard only listens on `127.0.0.1`. The API refuses requests from
   other websites (a custom header is required) and from other host names
   (which blocks DNS rebinding).
+
+### Where things are kept
+
+Projects go in `~/repodock/<owner>/<project>` (change it with `--dir` or
+`REPODOCK_DIR`). repodock's own files are in `~/repodock/.repodock/`: the last
+five logs of each project, downloaded releases, and `.repodock.json` next to
+it holds your settings.
 
 ### Updating and deleting
 
@@ -135,7 +198,11 @@ python -m unittest discover -s tests
 ```
 
 The tests use local git repositories and a fake GitHub API, so they need no
-network. CI runs them on Linux (Python 3.9 to 3.13), Windows and macOS.
+network. CI runs them on Linux (Python 3.9 to 3.13), Windows and macOS. The
+Windows workflow builds `repodock.exe` and `repodock-cli.exe` with PyInstaller
+(`packaging/windows/repodock.spec`), opens the app window and quits it, then
+builds and silently installs the Inno Setup installer. Publishing a GitHub
+release attaches the installer and the portable zip to it.
 
 ## License
 

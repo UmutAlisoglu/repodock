@@ -10,16 +10,18 @@ this server never approves.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import urllib.parse
 import socketserver
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import __version__
 from .app import Dock, DockError
 from .page import FAVICON, PAGE
 
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
-MAX_BODY = 1_000_000
+MAX_BODY = 5_000_000
 
 
 def make_handler(dock: Dock, verbose: bool = False) -> type[BaseHTTPRequestHandler]:
@@ -48,6 +50,16 @@ def make_handler(dock: Dock, verbose: bool = False) -> type[BaseHTTPRequestHandl
                 job = dock.runner.job(key)
                 lines = job.output(after) if job else []
                 self.send(200, {"lines": lines, "job": job.to_dict() if job else None})
+            elif url.path == "/api/ping":
+                self.send(200, {"app": "repodock", "version": __version__, "pid": os.getpid()})
+            elif url.path == "/api/export":
+                body = json.dumps(dock.export(), indent=2).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Disposition", 'attachment; filename="repodock-library.json"')
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
             else:
                 self.send(404, {"error": "not found"})
 
@@ -71,7 +83,7 @@ def make_handler(dock: Dock, verbose: bool = False) -> type[BaseHTTPRequestHandl
                 result = action(dock, body)
             except (DockError, RuntimeError) as exc:
                 return self.send(400, {"error": str(exc)})
-            except (KeyError, TypeError) as exc:
+            except (KeyError, TypeError, ValueError, AttributeError) as exc:
                 return self.send(400, {"error": f"bad request: {exc}"})
             except OSError as exc:
                 return self.send(500, {"error": str(exc)})
@@ -87,7 +99,8 @@ def make_handler(dock: Dock, verbose: bool = False) -> type[BaseHTTPRequestHandl
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("X-Frame-Options", "DENY")
-            self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'")
+            self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+                             "img-src 'self' data: https://github.com https://avatars.githubusercontent.com; frame-ancestors 'none'")
             self.end_headers()
             self.wfile.write(body)
 
@@ -98,17 +111,50 @@ def make_handler(dock: Dock, verbose: bool = False) -> type[BaseHTTPRequestHandl
     return Handler
 
 
+def _show(d: Dock, _b: dict) -> dict:
+    if d.show_window:
+        d.show_window()
+        return {"shown": True}
+    return {"shown": False}
+
+
+def _quit(d: Dock, _b: dict) -> dict:
+    if not d.quit:
+        raise DockError("close the terminal window (or press Ctrl+C) to quit repodock")
+    d.quit()
+    return {"quitting": True}
+
+
 ACTIONS = {
     "/api/add": lambda d, b: d.add(b["input"]),
     "/api/add-many": lambda d, b: d.add_many(list(b["repos"])),
-    "/api/run": lambda d, b: d.run(b["key"], b.get("command"), bool(b.get("confirmed")), b.get("install")),
+    "/api/search": lambda d, b: d.search(str(b["query"])),
+    "/api/run": lambda d, b: d.run(b["key"], b.get("command"), bool(b.get("confirmed")), b.get("install"), b.get("action")),
     "/api/install": lambda d, b: d.install(b["key"]),
     "/api/stop": lambda d, b: {"stopped": d.stop(b["key"])},
+    "/api/stop-all": lambda d, b: {"stopped": d.stop_all()},
     "/api/command": lambda d, b: d.set_command(b["key"], b.get("command")),
+    "/api/configure": lambda d, b: (d.configure(b["key"], **b["fields"]), None)[1],
+    "/api/env": lambda d, b: d.env(b["key"]),
+    "/api/set-env": lambda d, b: d.set_env(b["key"], list(b["vars"])),
     "/api/update": lambda d, b: d.update(b["key"]),
+    "/api/update-all": lambda d, b: d.update_all(),
+    "/api/check-updates": lambda d, b: d.check_updates(b.get("keys")),
     "/api/delete": lambda d, b: d.delete(b["key"], bool(b.get("files", True))),
-    "/api/open": lambda d, b: d.open_folder(b["key"]),
+    "/api/open": lambda d, b: d.open_folder(b["key"], b.get("which", "project")),
+    "/api/open-url": lambda d, b: d.open_url(str(b["url"])),
     "/api/redetect": lambda d, b: (d.candidates(b["key"], refresh=True), None)[1],
+    "/api/releases": lambda d, b: {"releases": d.releases(b["key"])},
+    "/api/download-release": lambda d, b: d.download_release(b["key"], str(b["tag"]), str(b["asset"])),
+    "/api/logs": lambda d, b: {"logs": d.logs(b["key"])},
+    "/api/log-file": lambda d, b: {"text": d.log_file(b["key"], str(b["name"]))},
+    "/api/cleanable": lambda d, b: {"items": d.cleanable(b["key"])},
+    "/api/clean": lambda d, b: d.clean(b["key"], list(b["names"])),
+    "/api/install-tool": lambda d, b: d.install_tool(str(b["tool"])),
+    "/api/settings": lambda d, b: {"settings": d.set_settings(dict(b["changes"]))},
+    "/api/import": lambda d, b: d.import_(b["library"]),
+    "/api/show": _show,
+    "/api/quit": _quit,
 }
 
 

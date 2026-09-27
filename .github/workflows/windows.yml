@@ -20,35 +20,58 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install repodock and PyInstaller
-        run: python -m pip install . pyinstaller
+      - name: Install repodock with the app window, and PyInstaller
+        run: python -m pip install ".[app]" pyinstaller
 
-      - name: Build repodock.exe
-        run: >
-          pyinstaller --noconfirm --onedir --name repodock --console
-          --icon packaging/windows/repodock.ico packaging/windows/entry.py
+      - name: Build repodock.exe and repodock-cli.exe
+        run: pyinstaller --noconfirm packaging/windows/repodock.spec
 
-      - name: Smoke test the exe
+      - name: Test the command line
         shell: pwsh
         run: |
-          $exe = "dist\repodock\repodock.exe"
-          & $exe --version
+          $cli = "dist\repodock\repodock-cli.exe"
+          & $cli --version
           if ($LASTEXITCODE -ne 0) { throw "--version failed" }
-          & $exe detect .
+          & $cli detect .
           if ($LASTEXITCODE -ne 0) { throw "detect failed" }
-          $env:REPODOCK_DIR = "$env:RUNNER_TEMP\repodock-home"
-          $p = Start-Process -FilePath $exe -ArgumentList "--no-open","--port","8799" -PassThru
+          $env:REPODOCK_DIR = "$env:RUNNER_TEMP\repodock-browser"
+          $p = Start-Process -FilePath $cli -ArgumentList "--browser","--no-open","--port","8799" -PassThru
           $ok = $false
           foreach ($i in 1..30) {
             Start-Sleep -Seconds 1
-            try {
-              $r = Invoke-RestMethod -Uri "http://127.0.0.1:8799/api/state"
-              $ok = $true; break
-            } catch { }
+            try { $state = Invoke-RestMethod -Uri "http://127.0.0.1:8799/api/state"; $ok = $true; break } catch { }
           }
           Stop-Process -Id $p.Id -Force
           if (-not $ok) { throw "the dashboard did not answer" }
-          "dashboard answered"
+          "browser mode answered, version $($state.version)"
+
+      - name: Test the app window
+        shell: pwsh
+        run: |
+          $env:REPODOCK_DIR = "$env:RUNNER_TEMP\repodock-app"
+          $app = Start-Process -FilePath "dist\repodock\repodock.exe" -ArgumentList "--minimized" -PassThru
+          $instance = "$env:REPODOCK_DIR\.repodock\instance.json"
+          $port = $null
+          foreach ($i in 1..60) {
+            Start-Sleep -Seconds 1
+            if (Test-Path $instance) {
+              $port = (Get-Content $instance | ConvertFrom-Json).port
+              try { $state = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/state"; if ($state.app.mode -eq "window") { break } } catch { }
+            }
+            if ($app.HasExited) { Get-Content "$env:LOCALAPPDATA\repodock\repodock.log" -ErrorAction SilentlyContinue; throw "repodock.exe exited early" }
+          }
+          if (-not $port) { throw "repodock.exe did not start" }
+          "mode: $($state.app.mode), tray: $($state.app.tray)"
+          if ($state.app.mode -ne "window") { Get-Content "$env:LOCALAPPDATA\repodock\repodock.log" -ErrorAction SilentlyContinue; throw "the app window did not open" }
+          # Starting it again shows the running one instead of a second copy.
+          $out = & "dist\repodock\repodock-cli.exe" 2>&1 | Out-String
+          $out
+          if ($out -notmatch "already running") { throw "a second repodock started" }
+          # Quit from the page's Settings > Quit.
+          Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$port/api/quit" -Headers @{ "X-Repodock" = "1" } -ContentType "application/json" -Body "{}"
+          if (-not $app.WaitForExit(20000)) { Stop-Process -Id $app.Id -Force; throw "repodock.exe did not quit" }
+          if (Test-Path $instance) { throw "instance file was left behind" }
+          "app window opened and quit cleanly"
 
       - name: Build the installer
         shell: pwsh
@@ -67,9 +90,10 @@ jobs:
         run: |
           $p = Start-Process -FilePath dist\repodock-setup.exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/CURRENTUSER","/NORESTART" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "installer exited with $($p.ExitCode)" }
-          $installed = "$env:LOCALAPPDATA\Programs\repodock\repodock.exe"
-          & $installed --version
+          $installed = "$env:LOCALAPPDATA\Programs\repodock"
+          & "$installed\repodock-cli.exe" --version
           if ($LASTEXITCODE -ne 0) { throw "installed exe failed" }
+          if (-not (Test-Path "$installed\repodock.exe")) { throw "repodock.exe missing" }
 
       - uses: actions/upload-artifact@v4
         with:

@@ -16,7 +16,11 @@ from pathlib import Path
 from typing import Callable
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07")
+# A local web address printed by a running app ("Listening on http://localhost:3000").
+LOCAL_URL = re.compile(r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):\d{2,5}(?:/[^\s'\"<>)\]]*)?")
 MAX_LINES = 3000
+# Child processes of a windowed app would each get a console window without this.
+NO_WINDOW = {"creationflags": 0x08000000} if sys.platform.startswith("win") else {}
 # Line numbers keep increasing across jobs, so a log view can keep appending
 # when an install is followed by a run, or a project is run again.
 _SEQ = itertools.count(1)
@@ -28,8 +32,9 @@ class Job:
     """One running (or finished) command, or a background task like a clone."""
 
     key: str
-    kind: str  # "run", "install", "clone", "update"
+    kind: str  # "run", "install", "clone", "update", "release", "tool"
     command: str
+    label: str | None = None  # a custom action's name, like "Build"
     started: float = field(default_factory=time.time)
     ended: float | None = None
     exit_code: int | None = None
@@ -38,7 +43,9 @@ class Job:
     proc: subprocess.Popen | None = field(default=None, repr=False)
     lines: collections.deque = field(default_factory=lambda: collections.deque(maxlen=MAX_LINES), repr=False)
     seq: int = 0
+    first_seq: int = 0  # lines after this one belong to this job
     stopping: bool = False
+    thread: threading.Thread | None = field(default=None, repr=False)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def log(self, text: str) -> None:
@@ -48,6 +55,10 @@ class Job:
             with self.lock, _SEQ_LOCK:
                 self.seq = next(_SEQ)
                 self.lines.append((self.seq, line))
+            if self.kind == "run" and not self.url and self.running:
+                m = LOCAL_URL.search(line)
+                if m:
+                    self.url = re.sub(r"//(0\.0\.0\.0|\[::\]?)", "//localhost", m.group(0).rstrip(".,;"))
 
     @property
     def running(self) -> bool:
@@ -57,9 +68,13 @@ class Job:
         with self.lock:
             return [item for item in self.lines if item[0] > after]
 
+    def own_output(self) -> list[str]:
+        """This job's lines, without the earlier jobs' output carried above it."""
+        return [line for _, line in self.output(self.first_seq)]
+
     def to_dict(self) -> dict:
         return {
-            "kind": self.kind, "command": self.command, "running": self.running, "started": self.started,
+            "kind": self.kind, "command": self.command, "label": self.label, "running": self.running, "started": self.started,
             "ended": self.ended, "exit_code": self.exit_code, "error": self.error, "url": self.url,
             "seq": self.seq, "stopping": self.stopping, "pid": self.proc.pid if self.proc else None,
         }
@@ -69,6 +84,8 @@ class Runner:
     def __init__(self) -> None:
         self.jobs: dict[str, Job] = {}
         self.lock = threading.Lock()
+        # Called after every job ends, before the job's own on_done (logs, crash notices).
+        self.on_finish: Callable[[Job], None] | None = None
 
     def job(self, key: str) -> Job | None:
         with self.lock:
@@ -87,7 +104,16 @@ class Runner:
                 # Keep the earlier output (download, install) above the new job's.
                 job.lines.extend(current.output())
                 job.seq = current.seq
+            job.first_seq = job.seq
             self.jobs[job.key] = job
+
+    def _finished(self, job: Job, on_done: Callable[[Job], None] | None) -> None:
+        for fn in (self.on_finish, on_done):
+            if fn:
+                try:
+                    fn(job)
+                except Exception as exc:  # a failing hook must not hide the job's result
+                    job.log(f"repodock: {exc}")
 
     def task(self, key: str, kind: str, label: str, fn: Callable[[Callable[[str], None]], None], on_done: Callable[[Job], None] | None = None) -> Job:
         """Run a Python function in the background, capturing what it logs."""
@@ -104,22 +130,22 @@ class Runner:
                 job.log(f"Error: {exc}")
             finally:
                 job.ended = time.time()
-                if on_done:
-                    on_done(job)
+                self._finished(job, on_done)
 
-        threading.Thread(target=work, name=f"repodock-{kind}-{key}", daemon=True).start()
+        job.thread = threading.Thread(target=work, name=f"repodock-{kind}-{key}", daemon=True)
+        job.thread.start()
         return job
 
     def start(self, key: str, kind: str, command: str, cwd: Path, url: str | None = None, env: dict | None = None,
-              on_done: Callable[[Job], None] | None = None) -> Job:
+              on_done: Callable[[Job], None] | None = None, label: str | None = None) -> Job:
         """Run a shell command in ``cwd`` (the command string is what the user saw and approved)."""
-        job = Job(key, kind, command, url=url)
+        job = Job(key, kind, command, url=url, label=label)
         self._register(job)
         full_env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", "FORCE_COLOR": "0", "NO_COLOR": "1", **(env or {})}
         full_env.pop("VIRTUAL_ENV", None)  # don't leak repodock's own venv into the repo's commands
         options: dict = {}
         if sys.platform.startswith("win"):
-            options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+            options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | NO_WINDOW["creationflags"]  # type: ignore[attr-defined]
         else:
             options["start_new_session"] = True  # own process group, so Stop reaches child processes
         job.log(f"$ {command}")
@@ -131,8 +157,7 @@ class Runner:
             job.exit_code = -1
             job.ended = time.time()
             job.log(f"Could not start: {exc}")
-            if on_done:
-                on_done(job)
+            self._finished(job, on_done)
             return job
 
         def pump() -> None:
@@ -146,10 +171,10 @@ class Runner:
                 job.log("Stopped.")
             else:
                 job.log(f"Exited with code {job.exit_code}.")
-            if on_done:
-                on_done(job)
+            self._finished(job, on_done)
 
-        threading.Thread(target=pump, name=f"repodock-{kind}-{key}", daemon=True).start()
+        job.thread = threading.Thread(target=pump, name=f"repodock-{kind}-{key}", daemon=True)
+        job.thread.start()
         return job
 
     def stop(self, key: str, timeout: float = 5) -> bool:
@@ -160,9 +185,15 @@ class Runner:
         kill_tree(job.proc, timeout)
         return True
 
+    def running(self, kind: str | None = None) -> list[Job]:
+        with self.lock:
+            return [j for j in self.jobs.values() if j.running and j.proc and (kind is None or j.kind == kind)]
+
     def stop_all(self) -> None:
-        for key in list(self.jobs):
-            self.stop(key, timeout=3)
+        stopped = [j for j in self.running() if self.stop(j.key, timeout=3)]
+        for job in stopped:  # let them save their logs before repodock exits
+            if job.thread:
+                job.thread.join(3)
 
 
 def _decode(raw: bytes) -> str:
@@ -178,7 +209,7 @@ def kill_tree(proc: subprocess.Popen, timeout: float = 5) -> None:
     if proc.poll() is not None:
         return
     if sys.platform.startswith("win"):
-        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, **NO_WINDOW)
         try:
             proc.wait(timeout)
         except subprocess.TimeoutExpired:

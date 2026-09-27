@@ -381,7 +381,11 @@ def system_python() -> str | None:
 
 def repodock_command() -> str:
     """How to start repodock itself (used to serve static sites)."""
-    return q(sys.executable) if frozen() else f"{q(sys.executable)} -m repodock"
+    if frozen():
+        # The Windows build has a windowed repodock.exe and a console repodock-cli.exe next to it.
+        cli = Path(sys.executable).with_name("repodock-cli.exe")
+        return q(str(cli if cli.exists() else sys.executable))
+    return f"{q(sys.executable)} -m repodock"
 
 
 def expand(command: str, root: Path, port: int | str | None = None, platform: str | None = None, assume_venv: bool = False) -> str:

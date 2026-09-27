@@ -25,6 +25,9 @@ UninstallDisplayIcon={app}\repodock.exe
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+; Upgrading while repodock runs: offer to close it first.
+CloseApplications=yes
+RestartApplications=no
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 
@@ -40,6 +43,10 @@ Name: "{autodesktop}\repodock"; Filename: "{app}\repodock.exe"; Tasks: desktopic
 
 [Run]
 Filename: "{app}\repodock.exe"; Description: "Start repodock now"; Flags: nowait postinstall skipifsilent
+
+[Registry]
+; "Start with Windows" is switched on inside repodock; remove it when repodock is uninstalled.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "repodock"; Flags: uninsdeletevalue dontcreatekey
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"

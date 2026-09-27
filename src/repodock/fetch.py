@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable
 
 from .github import GitHub, GitHubError
+from .runner import NO_WINDOW
 
 Log = Callable[[str], None]
 
@@ -28,7 +29,7 @@ def has_git() -> bool:
 def _run(cmd: list[str], cwd: Path | None, log: Log) -> None:
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
     try:
-        proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **NO_WINDOW)
     except OSError as exc:
         raise FetchError(f"could not start {cmd[0]}: {exc}") from None
     assert proc.stdout is not None
@@ -56,6 +57,53 @@ def clone(url: str, dest: Path, branch: str | None, log: Log) -> None:
 def pull(dest: Path, log: Log) -> None:
     log("$ git pull --ff-only")
     _run(["git", "pull", "--ff-only"], dest, log)
+
+
+def git_output(args: list[str], cwd: Path, timeout: float = 120) -> str:
+    """Run a quiet git command and return its output (raises FetchError)."""
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    try:
+        res = subprocess.run(["git", *args], cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                             timeout=timeout, **NO_WINDOW)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise FetchError(f"git {args[0]} failed: {exc}") from None
+    if res.returncode != 0:
+        raise FetchError((res.stderr or res.stdout).strip().splitlines()[-1] if (res.stderr or res.stdout).strip() else f"git {args[0]} failed")
+    return res.stdout
+
+
+def commits_behind(dest: Path) -> int:
+    """Fetch and count the commits the local branch is missing from its upstream."""
+    git_output(["fetch", "--quiet"], dest)
+    return int(git_output(["rev-list", "--count", "HEAD..@{u}"], dest).strip() or 0)
+
+
+def download_file(gh: GitHub, url: str, dest: Path, log: Log) -> int:
+    """Download one file with progress in the log; returns its size."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + ".part")
+    try:
+        with gh.open(url, _accept="application/octet-stream") as resp, open(part, "wb") as fh:
+            size = int(resp.headers.get("Content-Length") or 0)
+            total, shown = 0, -1
+            while True:
+                chunk = resp.read(1 << 16)
+                if not chunk:
+                    break
+                fh.write(chunk)
+                total += len(chunk)
+                if size and int(total * 10 / size) != shown:
+                    shown = int(total * 10 / size)
+                    log(f"\r{total / 1_048_576:.1f} of {size / 1_048_576:.1f} MB")
+        os.replace(part, dest)
+    except (GitHubError, OSError) as exc:
+        try:
+            part.unlink()
+        except OSError:
+            pass
+        raise FetchError(f"download failed: {exc}") from None
+    log(f"Downloaded {dest.name} ({total / 1_048_576:.1f} MB)")
+    return total
 
 
 def download_zip(gh: GitHub, full_name: str, ref: str, dest: Path, log: Log) -> None:

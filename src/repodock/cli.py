@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import signal
 import sys
+import threading
 import time
+import urllib.request
 import webbrowser
 from pathlib import Path
 
@@ -50,7 +53,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _serve_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--port", type=int, default=int(os.environ.get("REPODOCK_PORT", "8766")), help="port (default: 8766)")
-    p.add_argument("--no-open", action="store_true", help="don't open the browser")
+    p.add_argument("--browser", action="store_true", help="use the browser instead of the app window")
+    p.add_argument("--minimized", action="store_true", help="start in the tray without showing the window")
+    p.add_argument("--no-open", action="store_true", help="don't open the browser (implies --browser)")
     p.add_argument("-v", "--verbose", action="store_true", help="log requests")
 
 
@@ -84,19 +89,105 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_ERROR
 
 
+def _instance_file(dock: Dock) -> Path:
+    return dock.store.data_dir / "instance.json"
+
+
+def _running_instance(dock: Dock) -> int | None:
+    """The port of a repodock that's already running for this folder, if any."""
+    try:
+        port = int(json.loads(_instance_file(dock).read_text(encoding="utf-8"))["port"])
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/ping")
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(req, timeout=2) as resp:
+            return port if json.load(resp).get("app") == "repodock" else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _bring_to_front(port: int) -> bool:
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/show", data=b"{}", method="POST",
+                                 headers={"X-Repodock": "1", "Content-Type": "application/json"})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(req, timeout=5) as resp:
+            return bool(json.load(resp).get("shown"))
+    except (OSError, ValueError):
+        return False
+
+
 def cmd_serve(dock: Dock, args) -> int:
+    from . import desktop
     from .server import make_server
 
+    browser = args.browser or args.no_open
+    why_not = None if browser else desktop.unavailable()
+    existing = _running_instance(dock)
+    if existing:
+        # Only one repodock per folder: show the one that's running instead.
+        url = f"http://localhost:{existing}/"
+        if not _bring_to_front(existing) and not args.no_open:
+            webbrowser.open(url)
+        print(f"repodock is already running at {url}", file=sys.stderr)
+        return EXIT_OK
     try:
         server = make_server(dock, args.port, args.verbose)
     except OSError as exc:
-        print(f"repodock: cannot use port {args.port} ({exc.strerror or exc}). Is repodock already running? Try --port.", file=sys.stderr)
-        return EXIT_ERROR
-    url = f"http://localhost:{server.server_address[1]}/"
+        if browser or why_not:
+            print(f"repodock: cannot use port {args.port} ({exc.strerror or exc}). Is repodock already running? Try --port.", file=sys.stderr)
+            return EXIT_ERROR
+        server = make_server(dock, 0, args.verbose)  # the app window doesn't care which port it uses
+    port = server.server_address[1]
+    url = f"http://localhost:{port}/"
+    dock.store.data_dir.mkdir(parents=True, exist_ok=True)
+    _instance_file(dock).write_text(json.dumps({"port": port, "pid": os.getpid()}), encoding="utf-8")
+    dock.start_background()
+    try:
+        if not browser and not why_not:
+            return _serve_window(dock, server, url, args)
+        return _serve_browser(dock, server, url, args, why_not)
+    finally:
+        try:
+            _instance_file(dock).unlink()
+        except OSError:
+            pass
+
+
+def _serve_window(dock: Dock, server, url: str, args) -> int:
+    from . import desktop
+
+    thread = threading.Thread(target=server.serve_forever, name="repodock-server", daemon=True)
+    thread.start()
+    print(f"repodock is running in its own window ({url})", file=sys.stderr)
+    try:
+        desktop.run(dock, url, minimized=args.minimized)
+    except Exception as exc:
+        # The window couldn't be created (no desktop session, broken WebView2), or it closed while apps
+        # were still running: carry on in the browser rather than dropping everything.
+        if dock.runner.running() or not isinstance(exc, RuntimeError):
+            print(f"The app window failed ({exc}); opening repodock in the browser.", file=sys.stderr)
+            dock.quit = lambda: threading.Thread(target=server.shutdown, daemon=True).start()
+            if not args.minimized:
+                webbrowser.open(url)
+            try:
+                while thread.is_alive():
+                    thread.join(0.5)
+            except KeyboardInterrupt:
+                pass
+    finally:
+        dock.close()
+        server.shutdown()
+        server.server_close()
+    return EXIT_OK
+
+
+def _serve_browser(dock: Dock, server, url: str, args, why_not: str | None) -> int:
     print(f"repodock is running at {url}  (Ctrl+C to stop)\nRepositories are kept in {dock.store.root}", file=sys.stderr)
+    if why_not and not args.browser:
+        print(f"Opening it in the browser: {why_not}.", file=sys.stderr)
     if not dock.use_git:
         print("Git isn't installed; repositories will be downloaded as zip files.", file=sys.stderr)
-    if not args.no_open:
+    if not args.no_open and not args.minimized:
         webbrowser.open(url)
 
     def on_term(_sig, _frame):  # stop running projects when repodock itself is stopped
@@ -110,7 +201,7 @@ def cmd_serve(dock: Dock, args) -> int:
     except KeyboardInterrupt:
         print("\nStopping running projects...", file=sys.stderr)
     finally:
-        dock.runner.stop_all()
+        dock.close()
         server.server_close()
     return EXIT_OK
 
@@ -150,7 +241,7 @@ def cmd_add(dock: Dock, args) -> int:
         ok = _wait(dock, out["added"])
     else:
         ok = _wait(dock, [result["key"]])
-    print(f"Done. Run `repodock` to open the dashboard." if ok else "Some downloads failed.")
+    print("Done. Run `repodock` to open the dashboard." if ok else "Some downloads failed.")
     return EXIT_OK if ok else EXIT_ERROR
 
 
