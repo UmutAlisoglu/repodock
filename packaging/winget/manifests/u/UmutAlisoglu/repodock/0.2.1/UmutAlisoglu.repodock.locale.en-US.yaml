@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+
+PackageIdentifier: UmutAlisoglu.repodock
+PackageVersion: 0.2.1
+PackageLocale: en-US
+Publisher: UmutAlisoglu
+PublisherUrl: https://github.com/UmutAlisoglu
+PublisherSupportUrl: https://github.com/UmutAlisoglu/repodock/issues
+PackageName: repodock
+PackageUrl: https://github.com/UmutAlisoglu/repodock
+License: MIT
+LicenseUrl: https://github.com/UmutAlisoglu/repodock/blob/main/LICENSE
+ShortDescription: Paste a GitHub link, and repodock downloads the project and runs it from a local dashboard.
+Description: |-
+  repodock downloads projects from GitHub and runs them from one window. Paste a
+  link (or a username to pick from their repositories) and each project gets a
+  card with its detected run command, Run and Stop buttons, live output, CPU and
+  memory use, and buttons to update, configure or delete it. It works out how to
+  run Node.js, Python, Go, Rust, .NET, Java and Docker projects, static websites
+  and ready-made programs from GitHub Releases, and never installs or runs
+  anything without asking first.
+Moniker: repodock
+Tags:
+- github
+- launcher
+- dashboard
+- developer-tools
+- self-hosted
+ReleaseNotesUrl: https://github.com/UmutAlisoglu/repodock/releases/tag/v0.2.1
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

@@ -1,0 +1,33 @@
+{
+    "version": "0.2.1",
+    "description": "Paste a GitHub link, and repodock downloads the project and runs it from a local dashboard.",
+    "homepage": "https://github.com/UmutAlisoglu/repodock",
+    "license": "MIT",
+    "notes": "Projects are downloaded into ~/repodock. Start it from the Start Menu, or run `repodock` in a terminal.",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/UmutAlisoglu/repodock/releases/download/v0.2.1/repodock-windows-portable.zip",
+            "hash": "d535cf5ed88cc98466214df94c2f54f3b378d29c6d8594182271d0726fef29d5"
+        }
+    },
+    "bin": [
+        [
+            "repodock-cli.exe",
+            "repodock"
+        ]
+    ],
+    "shortcuts": [
+        [
+            "repodock.exe",
+            "repodock"
+        ]
+    ],
+    "checkver": "github",
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/UmutAlisoglu/repodock/releases/download/v$version/repodock-windows-portable.zip"
+            }
+        }
+    }
+}
