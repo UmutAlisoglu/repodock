@@ -3,12 +3,14 @@
 Run by .github/workflows/windows.yml when a release is published, with the
 installer and zip it just attached to the release:
 
-    python packaging/manifests.py 0.2.0 dist/repodock-setup.exe dist/repodock-windows-portable.zip dist/manifests
+    python packaging/manifests.py 0.2.0 dist/repodock-setup.exe dist/repodock-windows-portable.zip packaging/winget
 
 It updates bucket/repodock.json (so `scoop bucket add repodock
 https://github.com/UmutAlisoglu/repodock` always installs the latest release)
-and writes the three winget manifests into the output folder, ready to submit
-to https://github.com/microsoft/winget-pkgs.
+and writes the three winget manifests to <folder>/manifests/u/UmutAlisoglu/repodock/<version>,
+ready to submit to https://github.com/microsoft/winget-pkgs:
+
+    wingetcreate submit --token <GitHub token> packaging/winget/manifests/u/UmutAlisoglu/repodock/0.2.0
 """
 
 from __future__ import annotations
@@ -116,12 +118,11 @@ def main(argv: list[str]) -> int:
         print(__doc__)
         return 2
     version, setup, portable, out = argv[0].lstrip("v"), Path(argv[1]), Path(argv[2]), Path(argv[3])
-    folder = out / "winget" / "manifests" / PACKAGE[0].lower() / PACKAGE.split(".")[0] / PACKAGE.split(".")[1] / version
+    folder = out / "manifests" / PACKAGE[0].lower() / PACKAGE.split(".")[0] / PACKAGE.split(".")[1] / version
     folder.mkdir(parents=True, exist_ok=True)
     for name, text in winget(version, setup).items():
         (folder / name).write_text(text, encoding="utf-8", newline="\n")
     bucket = json.dumps(scoop(version, portable), indent=4) + "\n"
-    (out / "repodock.json").write_text(bucket, encoding="utf-8", newline="\n")
     root = Path(__file__).resolve().parent.parent
     (root / "bucket").mkdir(exist_ok=True)
     (root / "bucket" / "repodock.json").write_text(bucket, encoding="utf-8", newline="\n")
