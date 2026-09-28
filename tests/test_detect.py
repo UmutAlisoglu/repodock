@@ -1,4 +1,6 @@
 import json
+import os
+import sys
 import unittest
 from pathlib import Path
 
@@ -138,7 +140,7 @@ class DetectTests(unittest.TestCase):
         files = {"pyproject.toml": '[build-system]\nrequires = ["setuptools"]\n[project]\nname = "games"\n[project.scripts]\nfreegames = "g:main"\n',
                  "README.rst": "Install::\n\n  $ pipx install freegames\n  $ freegames --help\n  $ freegames play life\n"}
         c = self.first(files)
-        self.assertEqual((c.label, c.command), ("freegames play life", '"{venv_bin}/freegames" play life'))
+        self.assertEqual((c.label, c.command), ("freegames play life", f'"{{venv_bin}}{os.sep}freegames" play life'))
 
     def test_python_m_skips_build_helpers(self):
         found = detect(self.repo({"setup.py": "", "buildconfig/__main__.py": ""}), "linux")
@@ -151,8 +153,12 @@ class DetectTests(unittest.TestCase):
         self.assertEqual(found[0].command, "start_windows.bat")
         self.assertFalse(any("cmd_windows" in c.command or "update" in c.command for c in found))
         found = [c.command for c in detect(self.repo(files), "linux")]
-        self.assertEqual(found[0], "bash start_linux.sh")
-        self.assertNotIn("sh start_macos.sh", found)
+        if sys.platform == "darwin":
+            self.assertEqual(found[0], "sh start_macos.sh")
+            self.assertNotIn("bash start_linux.sh", found)
+        else:
+            self.assertEqual(found[0], "bash start_linux.sh")
+            self.assertNotIn("sh start_macos.sh", found)
         self.assertNotIn("make.bat", [c.command for c in detect(self.repo({"make.bat": "", "setup.py": ""}), "win32")])
 
     def test_compose_with_many_services_first(self):
