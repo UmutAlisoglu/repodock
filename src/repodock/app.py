@@ -33,7 +33,10 @@ ACTION_NAME = re.compile(r"^[\w .+-]{1,24}$")
 MAX_RESTARTS = 3  # within RESTART_WINDOW seconds, then give up
 RESTART_WINDOW = 300
 # Repo fields that describe how you use a project, carried over by export/import.
-PORTABLE = ("branch", "command", "actions", "port", "tags", "favorite", "auto_restart")
+PORTABLE = ("branch", "command", "actions", "port", "tags", "favorite", "auto_restart", "terminal")
+# What programs print when they need a real terminal, which repodock's log isn't.
+NEEDS_TTY = re.compile(r"(?i)(open /dev/tty|could not open (a )?(tty|terminal)|not a (tty|terminal)|inappropriate ioctl|"
+                       r"the handle is invalid|input is not a terminal|stdin is not a tty)")
 
 
 class DockError(Exception):
@@ -231,18 +234,21 @@ class Dock:
         branch = target.branch
         self.store.put(key, **meta, status="downloading", error=None, branch=branch, source="git" if self.use_git else "zip")
 
+        found: dict = {}
+
         def work(log) -> None:
             if self.use_git:
                 fetch.clone(f"{self.git_base}/{key}.git", folder, branch, log)
             else:
                 fetch.download_zip(self.gh, key, branch or meta.get("default_branch") or "HEAD", folder, log)
+            found["ready_made"] = self.ready_made(key)
 
         def done(job: Job) -> None:
             self.forget_detection(key)
             if job.error:
                 self.store.put(key, status="failed", error=job.error)
             else:
-                self.store.put(key, status="ready", error=None, downloaded=time.time(), behind=0)
+                self.store.put(key, status="ready", error=None, downloaded=time.time(), behind=0, ready_made=found.get("ready_made"))
                 self.refresh_size(key)
 
         self.runner.task(key, "clone", f"Downloading {key}", work, done)
@@ -280,8 +286,10 @@ class Dock:
         for name, value in fields.items():
             if name == "favorite":
                 clean[name] = bool(value)
-            elif name == "auto_restart":
+            elif name in ("auto_restart", "terminal"):
                 clean[name] = bool(value)
+                if name == "terminal" and value:
+                    clean["needs_terminal"] = False
             elif name == "tags":
                 tags = []
                 for tag in value or []:
@@ -373,7 +381,8 @@ class Dock:
         def start_run() -> Job:
             # Expand again: {python} points at .venv once dependencies are installed.
             self._restarts.pop(key, None)
-            return self.runner.start(key, "run", expand(command, folder, port, self.platform), folder, url=url, env=env, label=action)
+            return self.runner.start(key, "run", expand(command, folder, port, self.platform), folder, url=url, env=env, label=action,
+                                     terminal=bool(repo.get("terminal")) and action is None)
 
         if needs and install:
             deps = expand(cand.deps, folder, None, self.platform)  # type: ignore[union-attr]
@@ -430,6 +439,8 @@ class Dock:
         if job.kind != "run" or job.stopping or not job.exit_code:
             return
         repo = self.store.get(job.key) or {}
+        if not repo.get("terminal") and NEEDS_TTY.search("\n".join(job.own_output()[-40:])):
+            self.store.put(job.key, needs_terminal=True)
         name = job.label or "It"
         self.event("crash", job.key, f"{job.key} stopped with an error (exit code {job.exit_code}). {name} ran for {_duration(job.ended - job.started)}.")
         if not repo.get("auto_restart"):
@@ -447,7 +458,8 @@ class Dock:
                 return
             try:
                 restarts = self._restarts.get(job.key, [])
-                new = self.runner.start(job.key, "run", job.command, self.store.folder(job.key), url=job.url, env=None, label=job.label)
+                new = self.runner.start(job.key, "run", job.command, self.store.folder(job.key), url=job.url, env=None, label=job.label,
+                                        terminal=bool(repo.get("terminal")) and not job.label)
                 new.log(f"repodock: restarted after a crash ({len(restarts)} of {MAX_RESTARTS})")
                 self._restarts[job.key] = restarts
             except RuntimeError:
@@ -514,6 +526,23 @@ class Dock:
         except GitHubError as exc:
             raise DockError(str(exc)) from None
         return [summarize_release(r, self.platform) for r in found if not r.get("draft")]
+
+    def ready_made(self, key: str) -> dict | None:
+        """A program for this computer in the latest release, if there is one (often easier than building)."""
+        try:
+            found = self.gh.releases(key, limit=5)
+        except (GitHubError, OSError, ValueError):
+            return None
+        for rel in found:
+            if rel.get("draft") or rel.get("prerelease"):
+                continue
+            summary = summarize_release(rel, self.platform)
+            best = summary["assets"][0] if summary["assets"] else None
+            # Installers, programs and zips named for this system; not any zip.
+            if best and best["fit"] >= 9:
+                return {"tag": summary["tag"], "asset": best["name"], "size": best["size"]}
+            return None
+        return None
 
     def download_release(self, key: str, tag: str, asset: str) -> dict:
         self._repo(key)

@@ -162,6 +162,16 @@ class FeatureTests(unittest.TestCase):
             with self.assertRaises(DockError):
                 self.dock.log_file(self.key, bad)
 
+    def test_terminal_programs_are_noticed(self):
+        self.dock.set_command(self.key, py("import sys; print('error opening TTY: could not open /dev/tty'); sys.exit(1)"))
+        self.run_to_end()
+        wait_for(lambda: self.view().get("needs_terminal"))
+        self.dock.configure(self.key, terminal=True)
+        v = self.view()
+        self.assertTrue(v["terminal"])
+        self.assertFalse(v["needs_terminal"])
+        self.assertTrue(next(r for r in self.dock.export()["repos"] if r["full_name"] == self.key)["terminal"])
+
     # Releases ----------------------------------------------------------------
 
     def test_release_zip_for_windows(self):
@@ -198,6 +208,19 @@ class FeatureTests(unittest.TestCase):
         job = dock.runner.job(self.key)
         wait_for(lambda: not job.running, 30)
         self.assertIn("released program", job.own_output())
+
+    def test_ready_made_download_is_offered(self):
+        self.gh.repos["octo/tool"] = repo_json("octo/tool")
+        make_remote(self.remotes, "octo/tool", APP)
+        self.gh.add_release("octo/tool", "v3.0", {"tool-3.0-setup-windows.exe": b"MZ", "tool-3.0.tar.gz": b"x"})
+        dock = self.make_dock("dock-win", platform="win32")
+        key = dock.add("octo/tool")["key"]
+        wait_for(lambda: dock.store.get(key)["status"] == "ready")
+        self.assertEqual(dock.store.get(key)["ready_made"], {"tag": "v3.0", "asset": "tool-3.0-setup-windows.exe", "size": 2})
+        # Nothing for Linux in that release, and nothing when a project has no releases.
+        self.assertIsNone(self.make_dock("dock-linux", platform="linux").ready_made(key))
+        self.assertIsNone(self.dock.store.get(self.key).get("ready_made"))
+        dock.close()
 
     def test_release_names_are_checked(self):
         for tag, asset in (("../x", "a.zip"), ("v1", "../a.zip"), ("v1", ".env")):

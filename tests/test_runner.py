@@ -32,6 +32,16 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(job.exit_code, 3)
         self.assertEqual(lines[-1], "Exited with code 3.")
 
+    def test_terminal_window(self):
+        # On Windows the program gets its own console window; elsewhere the flag is ignored.
+        job = self.runner.start("t", "run", py("import time; open('started', 'w').write('1'); time.sleep(60)"), self.tmp.path, terminal=True)
+        wait_for(lambda: (self.tmp.path / "started").exists(), 30)
+        lines = [line for _, line in job.output()]
+        self.assertEqual("Running in its own terminal window." in lines, sys.platform.startswith("win"))
+        self.assertTrue(job.running)
+        self.assertTrue(self.runner.stop("t"))
+        wait_for(lambda: not job.running, 20)
+
     def test_stop_kills_the_whole_tree(self):
         # The shell starts Python, which starts another Python: Stop must end them all.
         child = (f"import subprocess; p = subprocess.Popen([r'{PY}', '-c', 'import time; time.sleep(60)']); "

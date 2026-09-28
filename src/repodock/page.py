@@ -504,11 +504,13 @@ async function repoSettings(key, tab = "general") {
     const tags = $("input", { type: "text", placeholder: "e.g. work, games, tools", value: (r.tags || []).join(", ") });
     const restart = $("input", { type: "checkbox", checked: r.auto_restart });
     const fav = $("input", { type: "checkbox", checked: r.favorite });
+    const term = $("input", { type: "checkbox", checked: r.terminal });
     panes.general = $("div", { style: "display:flex;flex-direction:column;gap:12px" },
       $("label", { class: "field" }, "Port", $("span", {}, "Used for {port} in the run command, and passed as the PORT variable. Leave empty to pick a free port each time."), port),
       $("label", { class: "field" }, "Tags", $("span", {}, "Separate with commas. Tags show up in the sidebar."), tags),
       $("label", { class: "check" }, fav, $("div", {}, "Favourite", $("small", {}, "Shown in Favourites and first when sorting by favourites."))),
-      $("label", { class: "check" }, restart, $("div", {}, "Restart automatically if it crashes", $("small", {}, "Up to 3 times in 5 minutes, then repodock gives up and tells you."))));
+      $("label", { class: "check" }, restart, $("div", {}, "Restart automatically if it crashes", $("small", {}, "Up to 3 times in 5 minutes, then repodock gives up and tells you."))),
+      state.platform.startsWith("win") ? $("label", { class: "check" }, term, $("div", {}, "Run in its own terminal window", $("small", {}, "For terminal programs with their own screen or questions. The output shows in that window instead of the log."))) : null);
 
     const actionRows = $("div", { style: "display:flex;flex-direction:column;gap:6px" });
     const addAction = (a = { name: "", command: "" }) => {
@@ -540,7 +542,7 @@ async function repoSettings(key, tab = "general") {
       envRows, $("div", { class: "actions" }, $("button", { type: "button", onclick: () => addEnv() }, "Add a variable"), fromExample));
 
     const save = () => close({
-      fields: { port: port.value ? Number(port.value) : null, tags: tags.value.split(",").map(t => t.trim()).filter(Boolean), auto_restart: restart.checked, favorite: fav.checked,
+      fields: { port: port.value ? Number(port.value) : null, tags: tags.value.split(",").map(t => t.trim()).filter(Boolean), auto_restart: restart.checked, favorite: fav.checked, terminal: term.checked,
         actions: [...actionRows.children].map(row => { const [n, c] = row.querySelectorAll("input"); return { name: n.value.trim(), command: c.value.trim() }; }).filter(a => a.name || a.command) },
       vars: [...envRows.children].map(row => { const [k, v] = row.querySelectorAll("input"); return [k.value.trim(), v.value]; }).filter(([k]) => k),
     });
@@ -583,6 +585,14 @@ async function showReleases(key) {
   }, "wide");
   if (!chosen) return;
   try { await api("/api/download-release", { key, ...chosen }); openLogs.add(key); refresh(); toast(`Downloading ${chosen.asset}`); } catch (e) { fail(e); }
+}
+
+async function runInTerminal(key) {
+  try { await api("/api/configure", { key, fields: { terminal: true } }); refresh(); run(key); } catch (e) { fail(e); }
+}
+
+async function downloadReadyMade(key, m) {
+  try { await api("/api/download-release", { key, tag: m.tag, asset: m.asset }); openLogs.add(key); refresh(); toast(`Downloading ${m.asset}`); } catch (e) { fail(e); }
 }
 
 // Cleaning -------------------------------------------------------------------------------
@@ -995,7 +1005,7 @@ function updateCard(p, r) {
   p.name.replaceChildren(settings.group === "none" ? $("span", { class: "owner" }, `${owner} / `) : "", r.name || name);
   p.name.href = r.html_url || `https://github.com/${r.key}`;
   p.meta.replaceChildren(...[r.language, r.stars ? `★ ${r.stars}` : null, r.size ? bytes(r.size) : null, r.last_run ? `ran ${ago(r.last_run)}` : (r.pushed_at ? `updated ${ago(r.pushed_at)}` : null),
-    r.git === false && r.exists ? "zip download" : null, r.auto_restart ? "auto-restart" : null].filter(Boolean).map(t => $("span", {}, t)));
+    r.git === false && r.exists ? "zip download" : null, r.auto_restart ? "auto-restart" : null, r.terminal ? "terminal window" : null].filter(Boolean).map(t => $("span", {}, t)));
   p.desc.textContent = r.description || ""; p.desc.hidden = !r.description;
 
   // Live stats while something runs.
@@ -1003,13 +1013,14 @@ function updateCard(p, r) {
   if (running && j.pid) {
     const s = r.stats || {};
     const open = isRun && j.url ? $("button", { type: "button", class: "primary", style: "padding:3px 10px;font-size:12.5px", onclick: () => openUrl(j.url) }, icon("ext"), "Open in browser") : null;
-    p.live.replaceChildren($("span", {}, "CPU ", $("b", {}, s.cpu !== undefined ? `${s.cpu}%` : "...")), $("span", {}, "RAM ", $("b", {}, s.rss ? bytes(s.rss) : "...")),
-      $("span", {}, "Up ", $("b", {}, uptime(j.started))), s.procs > 1 ? $("span", {}, `${s.procs} processes`) : null, $("span", { class: "spacer" }), open);
+    // replaceChildren would show a null as the text "null", so leave those out.
+    p.live.replaceChildren(...[$("span", {}, "CPU ", $("b", {}, s.cpu !== undefined ? `${s.cpu}%` : "...")), $("span", {}, "RAM ", $("b", {}, s.rss ? bytes(s.rss) : "...")),
+      $("span", {}, "Up ", $("b", {}, uptime(j.started))), s.procs > 1 ? $("span", {}, `${s.procs} processes`) : null, $("span", { class: "spacer" }), open].filter(Boolean));
   }
 
   p.cmdRow.hidden = !ready;
   if (ready && document.activeElement !== p.select && document.activeElement !== p.custom) {
-    const opts = r.candidates.map(c => $("option", { value: c.command, title: c.preview }, `${c.label}  ·  ${c.preview}`));
+    const opts = r.candidates.map(c => $("option", { value: c.command, title: c.preview }, c.label === c.preview ? c.label : `${c.label}  ·  ${c.preview}`));
     if (r.custom) opts.push($("option", { value: r.command, title: r.command_preview }, `Custom · ${r.command_preview}`));
     opts.push($("option", { value: "__custom" }, "Custom command..."));
     const sig = JSON.stringify([r.candidates.map(c => c.preview), r.command, r.custom]);
@@ -1020,6 +1031,17 @@ function updateCard(p, r) {
     if (!editing) p.custom.value = r.command || "";
   }
   const hints = [];
+  if (ready && r.needs_terminal && !r.terminal) {
+    hints.push(state.platform.startsWith("win")
+      ? $("div", { class: "hint warn" }, "This looks like a terminal program: it needs its own window to show its screen and read your keys. ",
+          $("button", { type: "button", style: "font-size:12.5px;padding:2px 9px", onclick: () => runInTerminal(r.key) }, "Run in a terminal window"))
+      : $("div", { class: "hint warn" }, "This looks like a terminal program: it needs a real terminal. Open a terminal in the project folder (⋯ > Open folder) and run the command there."));
+  }
+  if (ready && r.ready_made && !r.candidates.some(c => c.kind === "release")) {
+    const m = r.ready_made;
+    hints.push($("div", { class: "hint" }, `Ready-made download: ${m.asset} (${bytes(m.size)}) from release ${m.tag}. It's usually quicker than building the project yourself. `,
+      $("button", { type: "button", style: "font-size:12.5px;padding:2px 9px", onclick: () => downloadReadyMade(r.key, m) }, icon("down"), "Download it")));
+  }
   if (ready && !r.candidates.length && !r.command) hints.push($("div", { class: "hint warn" }, "repodock couldn't tell how to run this project. Check its README and type the command, or look for a ready-made program under ⋯ > Releases."));
   if (ready && r.missing_tool) {
     const tool = tools.get(r.missing_tool);

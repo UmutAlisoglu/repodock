@@ -106,6 +106,78 @@ class DetectTests(unittest.TestCase):
         found = detect(self.repo({"package.json": json.dumps({"scripts": {"dev": "vite"}}), "Dockerfile": "", "index.html": ""}), "linux")
         self.assertEqual([c.kind for c in found], ["node", "docker", "static"])
 
+    # Found by trying popular repositories -------------------------------------------
+
+    def test_python_apps_without_a_standard_entry(self):
+        c = self.first({"requirements.txt": "streamlit\npandas\n", "streamlit_app.py": "import streamlit as st\n"})
+        self.assertEqual(c.command, "{python} -m streamlit run streamlit_app.py --server.port {port}")
+        c = self.first({"requirements.txt": "flask\npython-dotenv\n", ".flaskenv": "FLASK_APP=blog.py\n", "blog.py": "from app import app\n"})
+        self.assertEqual(c.command, "{python} -m flask run --port {port}")
+        c = self.first({"requirements.txt": "fastapi\nuvicorn\n", "api.py": "from fastapi import FastAPI\napi = FastAPI()\n"})
+        self.assertEqual(c.command, "{python} -m uvicorn api:api --port {port}")
+        c = self.first({"requirements.txt": "pygame\n", "snake.py": "x = 1\nif __name__ == \"__main__\":\n    main()\n", "setup.py": ""})
+        self.assertEqual(c.command, "{python} snake.py")
+
+    def test_python_readme_command_and_requirements_variants(self):
+        c = self.first({"requirements_versions.txt": "torch\n", "requirements_docker.txt": "", "entry_with_update.py": "", "launch.py": "",
+                        "readme.md": "Run `python entry_with_update.py` or `python devscripts/x.py`\n", "devscripts/x.py": ""})
+        self.assertEqual((c.command, c.deps), ("{python} entry_with_update.py", "{system_python} -m venv .venv && {venv_python} -m pip install -r requirements_versions.txt"))
+        c = self.first({"manage.py": "", "requirements/dev.txt": "django\n", "requirements/prod.txt": ""})
+        self.assertTrue(c.deps.endswith("-m pip install -r requirements/dev.txt"))
+
+    def test_pip_install_e_only_when_buildable(self):
+        # A pyproject.toml with just a [project] table isn't meant to be installed (ComfyUI).
+        c = self.first({"pyproject.toml": '[project]\nname = "app"\ndependencies = ["numpy"]\n', "requirements.txt": "numpy\n", "main.py": ""})
+        self.assertNotIn("-e .", c.deps)
+        c = self.first({"pyproject.toml": '[project]\nname = "app"\ndependencies = ["django==5.0"]\n', "manage.py": ""})
+        self.assertTrue(c.deps.endswith('pip install "django==5.0"'))
+        c = self.first({"pyproject.toml": '[build-system]\nrequires = ["hatchling"]\n[project]\nname = "app"\n', "main.py": ""})
+        self.assertIn("-e .", c.deps)
+
+    def test_installed_command_uses_readme_arguments(self):
+        files = {"pyproject.toml": '[build-system]\nrequires = ["setuptools"]\n[project]\nname = "games"\n[project.scripts]\nfreegames = "g:main"\n',
+                 "README.rst": "Install::\n\n  $ pipx install freegames\n  $ freegames --help\n  $ freegames play life\n"}
+        c = self.first(files)
+        self.assertEqual((c.label, c.command), ("freegames play life", '"{venv_bin}/freegames" play life'))
+
+    def test_python_m_skips_build_helpers(self):
+        found = detect(self.repo({"setup.py": "", "buildconfig/__main__.py": ""}), "linux")
+        self.assertFalse(any("buildconfig" in c.command for c in found))
+
+    def test_launcher_scripts_first(self):
+        files = {"server.py": "", "start_windows.bat": "", "cmd_windows.bat": "", "update_wizard_windows.bat": "",
+                 "start_linux.sh": "#!/usr/bin/env bash\n", "start_macos.sh": ""}
+        found = detect(self.repo(files), "win32")
+        self.assertEqual(found[0].command, "start_windows.bat")
+        self.assertFalse(any("cmd_windows" in c.command or "update" in c.command for c in found))
+        found = [c.command for c in detect(self.repo(files), "linux")]
+        self.assertEqual(found[0], "bash start_linux.sh")
+        self.assertNotIn("sh start_macos.sh", found)
+        self.assertNotIn("make.bat", [c.command for c in detect(self.repo({"make.bat": "", "setup.py": ""}), "win32")])
+
+    def test_compose_with_many_services_first(self):
+        compose = "services:\n  web:\n    build: .\n  worker:\n    build: w\n  db:\n    image: postgres\n    environment:\n      A: b\n"
+        found = detect(self.repo({"package.json": json.dumps({"scripts": {"dev": "vite"}}), "compose.yml": compose, ".env.example": "A=1"}), "linux")
+        self.assertEqual(found[0].command, "docker compose up --build")
+        self.assertIn("starts 3 services together", found[0].notes)
+        self.assertTrue(any(".env.example" in n for n in found[0].notes))
+        c = self.first({"docker/docker-compose.yml": "services:\n  a:\n    image: x\n"})
+        self.assertEqual(c.command, "docker compose -f docker/docker-compose.yml up --build")
+        # One service: the app's own command still comes first.
+        found = detect(self.repo({"package.json": json.dumps({"scripts": {"dev": "vite"}}), "compose.yml": "services:\n  web:\n    build: .\n"}), "linux")
+        self.assertEqual(found[0].command, "npm run dev")
+
+    def test_bun_workspace_has_dependencies(self):
+        c = self.first({"package.json": json.dumps({"workspaces": ["frontend"], "scripts": {"dev": "bun run --filter frontend dev"}}), "bun.lock": ""})
+        self.assertEqual(c.deps, "bun install")
+
+    def test_folder_of_static_sites(self):
+        c = self.first({"a/index.html": "", "b/index.html": "", "README.md": ""})
+        self.assertEqual(c.command, "{repodock} static . --port {port}")
+
+    def test_procfile_gunicorn_not_on_windows(self):
+        self.assertEqual(detect(self.repo({"Procfile": "web: gunicorn app:app\n"}), "win32"), [])
+
     def test_nothing(self):
         self.assertEqual(detect(self.repo({"README.md": "# hi"})), [])
 

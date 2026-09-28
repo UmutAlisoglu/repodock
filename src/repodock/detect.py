@@ -46,7 +46,7 @@ class Candidate:
 TOOL_NAMES = {
     "node": "Node.js", "npm": "Node.js", "pnpm": "pnpm", "yarn": "Yarn", "bun": "Bun", "deno": "Deno",
     "go": "Go", "cargo": "Rust (cargo)", "dotnet": ".NET SDK", "mvn": "Maven", "gradle": "Gradle",
-    "java": "Java", "docker": "Docker", "make": "make", "powershell": "PowerShell", "sh": "a POSIX shell",
+    "java": "Java", "docker": "Docker", "make": "make", "powershell": "PowerShell", "sh": "a POSIX shell", "bash": "bash",
 }
 
 
@@ -136,6 +136,11 @@ def detect(root: Path, platform: str | None = None) -> list[Candidate]:
         if c.command not in seen:
             seen.add(c.command)
             unique.append(c)
+    # A program or launcher script the project ships, or a Docker setup with several services, beats a guess.
+    unique.sort(key=lambda c: 0 if c.kind in ("exe", "launcher") else 1 if c.kind == "docker" and "services" in " ".join(c.notes) else 2)
+    for c in unique:
+        if c.kind == "launcher":
+            c.kind = "script"
     return unique
 
 
@@ -166,7 +171,7 @@ def _node(root: Path, win: bool) -> list[Candidate]:
         pm, install = "bun", "bun install"
     else:
         pm, install = "npm", "npm ci" if (root / "package-lock.json").exists() else "npm install"
-    has_deps = bool(pkg.get("dependencies") or pkg.get("devDependencies"))
+    has_deps = bool(pkg.get("dependencies") or pkg.get("devDependencies") or pkg.get("workspaces") or (root / "pnpm-workspace.yaml").exists())
     common = dict(kind="node", tool=pm, deps=install if has_deps else None, deps_marker="node_modules" if has_deps else None)
     out = []
     for name in ("dev", "start", "serve", "preview", "develop"):
@@ -197,53 +202,167 @@ def _deno(root: Path, win: bool) -> list[Candidate]:
     return []
 
 
-PY_ENTRIES = ("main.py", "app.py", "run.py", "server.py", "bot.py", "start.py", "gui.py", "__main__.py")
+PY_ENTRIES = ("main.py", "app.py", "run.py", "server.py", "launch.py", "webui.py", "bot.py", "start.py", "gui.py", "__main__.py")
+# Python files that are never the way to start a project.
+PY_NOT_ENTRY = re.compile(r"(?i)^(setup|conftest|noxfile|fabfile|tasks|test.*|.*_test|download.*|update.*|build.*|install.*|config|settings)\.py$")
+# Packages that ``python -m`` shouldn't pick.
+PY_NOT_MODULE = {"buildconfig", "scripts", "tools", "docs", "doc", "test", "tests", "examples", "benchmarks", "setup", "build", "ci"}
+
+
+def _requirements(root: Path) -> Path | None:
+    """requirements.txt, or a variant like requirements_versions.txt (not dev, test or docs ones)."""
+    if (root / "requirements.txt").is_file():
+        return root / "requirements.txt"
+    for path in sorted(root.glob("requirements*.txt")):
+        if not re.search(r"(?i)(dev|test|doc|docker|lint|ci|build|extra|optional)", path.name):
+            return path
+    # A requirements/ folder: the file for running it locally.
+    for name in ("local.txt", "dev.txt", "development.txt", "base.txt", "common.txt", "requirements.txt", "prod.txt", "production.txt"):
+        if (root / "requirements" / name).is_file():
+            return root / "requirements" / name
+    return None
+
+
+def _readme_commands(root: Path) -> list[str]:
+    """Commands that the README says to run, like "python webui.py" (Python files that exist only)."""
+    text = _readme_text(root)
+    found = []
+    for m in re.finditer(r"(?m)(?:^|[\s`$>])(?:python3?|py(?: -3)?|streamlit run)\s+((?:[\w.-]+/)*[\w.-]+\.py)\b", text):
+        entry = m.group(1).lstrip("./")
+        helper = re.search(r"(?i)(^|/)(dev|devscripts|scripts?|tools?|tests?|docs?|examples?|benchmarks?|ci)/", entry)
+        if (root / entry).is_file() and not helper and not PY_NOT_ENTRY.match(Path(entry).name) and entry not in found:
+            found.append(entry)
+    return found[:3]
+
+
+def _readme_text(root: Path) -> str:
+    for name in ("README.md", "readme.md", "README.rst", "README.txt", "README"):
+        if (root / name).is_file():
+            return _read(root / name, 200_000)
+    return ""
+
+
+def _code_lines(text: str) -> list[str]:
+    """Lines of a README that are commands: inside ``` blocks, indented blocks, or after a "$ " prompt."""
+    lines, fenced = [], False
+    for line in text.splitlines():
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+            continue
+        stripped = line.strip()
+        if stripped.startswith("$ "):
+            lines.append(stripped[2:])
+        elif fenced or line.startswith(("    ", "\t", "  ")):
+            lines.append(stripped)
+    return lines
+
+
+def _readme_args(root: Path, command: str) -> str | None:
+    """Arguments from the README's first example of ``command``, like "play life" for "freegames play life"."""
+    for line in _code_lines(_readme_text(root)):
+        line = re.split(r"\s+#", line, maxsplit=1)[0].strip()
+        if not line.startswith(command + " "):
+            continue
+        args = line[len(command):].strip()
+        # Only a subcommand, like "serve" or "play life": options and file names are too specific.
+        if re.fullmatch(r"[a-z][a-z0-9_-]*( [a-z][a-z0-9_-]*)?", args):
+            return args
+    return None
+
+
+def _module_with(root: Path, pattern: str) -> tuple[str, str] | None:
+    """(module, variable) of a top-level file that creates an app object, e.g. ("main", "app") for app = FastAPI()."""
+    files = [root / f"{n}.py" for n in ("main", "app", "server", "api", "asgi", "wsgi")]
+    files += sorted(p for p in root.glob("*.py") if p not in files)
+    for folder in ("app", "src", "backend/app"):
+        files += [root / folder / f"{n}.py" for n in ("main", "app", "server", "api")]
+    for path in files:
+        if not path.is_file():
+            continue
+        m = re.search(r"(?m)^(\w+)\s*=\s*" + pattern, _read(path, 100_000))
+        if m:
+            module = ".".join(path.relative_to(root).with_suffix("").parts)
+            return module, m.group(1)
+    return None
 
 
 def _python(root: Path, win: bool) -> list[Candidate]:
-    req = root / "requirements.txt"
+    req = _requirements(root)
     pyproject = root / "pyproject.toml"
     setup = root / "setup.py"
-    entries = [e for e in PY_ENTRIES if (root / e).is_file()]
+    readme = _readme_commands(root)
+    entries = list(dict.fromkeys(readme + [e for e in PY_ENTRIES if (root / e).is_file()]))
     manage = (root / "manage.py").is_file()
-    if not (req.is_file() or pyproject.is_file() or setup.is_file() or entries or manage):
+    if not (req or pyproject.is_file() or setup.is_file() or entries or manage):
         return []
-    reqs_text = _read(req).lower() if req.is_file() else ""
+    reqs_text = _read(req).lower() if req else ""
     project = _toml(pyproject) if pyproject.is_file() else {}
     proj = project.get("project") or {}
     poetry = ((project.get("tool") or {}).get("poetry") or {})
-    installable = bool(proj.get("name") or poetry.get("name") or setup.is_file())
-    all_text = reqs_text + " " + " ".join(proj.get("dependencies") or []).lower()
+    # "pip install -e ." needs something to build with. A pyproject.toml with only a
+    # [project] table (common in apps like ComfyUI) isn't meant to be installed.
+    installable = bool(setup.is_file() or poetry.get("name") or (proj.get("name") and ("build-system" in project or proj.get("scripts"))))
+    all_text = reqs_text + " " + " ".join(proj.get("dependencies") or []).lower() + " " + " ".join((poetry.get("dependencies") or {})).lower()
+
+    def uses(package: str) -> bool:
+        return re.search(r"(?m)(^|[\s\"'])" + re.escape(package) + r"(\b|$)", all_text) is not None
 
     steps = ["{system_python} -m venv .venv"]
-    if req.is_file():
-        steps.append("{venv_python} -m pip install -r requirements.txt")
+    if req:
+        steps.append("{venv_python} -m pip install -r " + q(req.relative_to(root).as_posix()))
     if installable:
         steps.append("{venv_python} -m pip install -e .")
+    elif not req and proj.get("dependencies"):
+        # Dependencies listed in pyproject.toml of a project that can't be installed itself.
+        steps.append("{venv_python} -m pip install " + " ".join(f'"{d}"' for d in proj["dependencies"][:60] if '"' not in d))
     deps = " && ".join(steps) if len(steps) > 1 else None
     common = dict(kind="python", deps=deps, deps_marker=".venv" if deps else None)
+    with_install = {**common, "deps": deps or "{system_python} -m venv .venv && {venv_python} -m pip install -e .", "deps_marker": ".venv"}
 
     out = []
     scripts = proj.get("scripts") or poetry.get("scripts") or {}
-    for name in list(scripts)[:2]:
-        out.append(Candidate(f"{name} (installed command)", f'"{{venv_bin}}{os.sep}{name}"', **{**common, "deps": deps or "{system_python} -m venv .venv && {venv_python} -m pip install -e .", "deps_marker": ".venv"}))
+    if installable:
+        for name in list(scripts)[:2]:
+            # Command-line tools often need arguments; use the README's example if it has one.
+            args = _readme_args(root, name)
+            label = f"{name} {args}" if args else f"{name} (installed command)"
+            out.append(Candidate(label, f'"{{venv_bin}}{os.sep}{name}"' + (f" {args}" if args else ""), **with_install))
     if manage:
         out.append(Candidate("Django dev server", "{python} manage.py runserver {port}", url="http://localhost:{port}/", **common))
+    if not entries and uses("streamlit"):
+        entries = [p.name for p in sorted(root.glob("*.py")) if re.search(r"(?m)^\s*import streamlit|^\s*from streamlit", _read(p, 60_000))][:2]
     for entry in entries:
         src = _read(root / entry, 60_000)
-        if "streamlit" in all_text and "streamlit" in src:
-            out.append(Candidate(f"streamlit run {entry}", f"{{python}} -m streamlit run {entry} --server.port {{port}}", url="http://localhost:{port}/", **common))
+        if uses("streamlit") and "streamlit" in src:
+            out.append(Candidate(f"streamlit run {entry}", f"{{python}} -m streamlit run {q(entry)} --server.port {{port}}", url="http://localhost:{port}/", **common))
         else:
-            out.append(Candidate(f"python {entry}", f"{{python}} {entry}", **common))
+            out.append(Candidate(f"python {entry}", f"{{python}} {q(entry)}", **common))
+    if uses("fastapi") and uses("uvicorn"):
+        found = _module_with(root, r"FastAPI\(")
+        if found:
+            target = f"{found[0]}:{found[1]}"
+            out.append(Candidate(f"uvicorn {target}", f"{{python}} -m uvicorn {target} --port {{port}}", url="http://localhost:{port}/docs", **common))
+    if uses("flask") and not manage:
+        env = _read(root / ".flaskenv")
+        if "FLASK_APP" in env or any((root / n).is_file() for n in ("app.py", "wsgi.py")) or (root / "app" / "__init__.py").is_file():
+            out.append(Candidate("flask run", "{python} -m flask run --port {port}", url="http://localhost:{port}/", **common))
     if not out:
         # A package with __main__.py: python -m package
         for main in _find(root, "__main__.py", depth=3):
             pkg = main.parent
-            if pkg == root:
+            if pkg == root or pkg.name in PY_NOT_MODULE or any(p in PY_NOT_MODULE for p in pkg.relative_to(root).parts):
                 continue
             module = ".".join(pkg.relative_to(root / "src" if (root / "src") in pkg.parents else root).parts)
-            out.append(Candidate(f"python -m {module}", f"{{python}} -m {module}", **{**common, "deps": deps or "{system_python} -m venv .venv && {venv_python} -m pip install -e .", "deps_marker": ".venv"}))
+            out.append(Candidate(f"python -m {module}", f"{{python}} -m {module}", **(with_install if installable or not deps else common)))
             break
+    if not out:
+        # Last resort: top-level scripts with an `if __name__ == "__main__":` block,
+        # preferring one named after the project.
+        mains = [p for p in sorted(root.glob("*.py")) if not PY_NOT_ENTRY.match(p.name) and re.search(r"(?m)^if __name__ ==", _read(p, 200_000))]
+        slug = re.sub(r"[^a-z0-9]", "", root.name.lower().split("_", 1)[-1])
+        mains.sort(key=lambda p: re.sub(r"[^a-z0-9]", "", p.stem.lower()) not in slug)
+        for p in mains[:2]:
+            out.append(Candidate(f"python {p.name}", f"{{python}} {q(p.name)}", **common))
     return out
 
 
@@ -306,13 +425,44 @@ def _procfile(root: Path, win: bool) -> list[Candidate]:
     if not (root / "Procfile").is_file():
         return []
     m = re.search(r"^web:\s*(.+)$", _read(root / "Procfile"), flags=re.M)
-    return [Candidate("Procfile web", m.group(1).strip().replace("$PORT", "{port}"), "procfile", url="http://localhost:{port}/")] if m else []
+    if not m:
+        return []
+    command = m.group(1).strip()
+    # Procfiles are written for Linux servers; gunicorn and shell syntax don't work on Windows.
+    if win and re.search(r"gunicorn|uwsgi|;|\$\{|\bexec\b", command):
+        return []
+    return [Candidate("Procfile web", command.replace("${PORT}", "{port}").replace("$PORT", "{port}"), "procfile", url="http://localhost:{port}/")]
+
+
+COMPOSE_NAMES = ("compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml")
+
+
+def _compose_services(text: str) -> int:
+    block = re.search(r"(?ms)^services:\s*\n(.*?)(?=^\S|\Z)", text)
+    if not block:
+        return 0
+    indents = re.findall(r"(?m)^( +)[\w.-]+:\s*$", block.group(1))
+    return indents.count(min(indents, key=len)) if indents else 0
 
 
 def _compose(root: Path, win: bool) -> list[Candidate]:
-    for name in ("compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml"):
-        if (root / name).is_file():
-            return [Candidate("docker compose up", "docker compose up --build", "docker", tool="docker", notes=["Docker Desktop must be running"])]
+    for folder in ("", "docker", "deploy", "deployment"):
+        for name in COMPOSE_NAMES:
+            path = root / folder / name
+            if not path.is_file():
+                continue
+            notes = ["Docker Desktop must be running"]
+            services = _compose_services(_read(path))
+            if services >= 3:
+                notes.append(f"starts {services} services together")
+            example = next((n for n in ("example.env", ".env.example", ".env.sample") if (path.parent / n).is_file()), None)
+            if example and not (path.parent / ".env").is_file():
+                notes.append(f"may need a .env file first: copy {folder + '/' if folder else ''}{example} to .env")
+            if folder:
+                command = f"docker compose -f {folder}/{name} up --build"
+            else:
+                command = "docker compose up --build"
+            return [Candidate("docker compose up", command, "docker", tool="docker", notes=notes)]
     return []
 
 
@@ -323,18 +473,42 @@ def _dockerfile(root: Path, win: bool) -> list[Candidate]:
     return [Candidate("docker build and run", f"docker build -t {tag} . && docker run --rm -P {tag}", "docker", tool="docker", notes=["Docker Desktop must be running"])]
 
 
+# Launcher scripts that projects ship for exactly this purpose, best first.
+LAUNCHERS_WIN = ("start_windows.bat", "webui-user.bat", "start.bat", "run.bat", "launch.bat", "quickstart.bat", "start.cmd", "run.cmd")
+LAUNCHERS_POSIX = ("start_linux.sh", "start_macos.sh", "webui.sh", "start.sh", "run.sh", "launch.sh", "quickstart.sh")
+# Helper scripts that aren't how you start a project.
+NOT_LAUNCHER = re.compile(r"(?i)^(cmd_|update|uninstall|install|setup|make\.bat|build|clean|test|lint|format|release|deploy|publish)")
+
+
 def _scripts(root: Path, win: bool) -> list[Candidate]:
     out = []
     names = sorted(p.name for p in root.iterdir() if p.is_file())
-    ranked = sorted(names, key=lambda n: not re.match(r"(?i)(start|run|launch|play)", n))
+    lower = {n.lower(): n for n in names}
+    launchers = LAUNCHERS_WIN if win else tuple(n for n in LAUNCHERS_POSIX if ("macos" in n) == (sys.platform == "darwin") or "_" not in n)
+    mine = "windows" if win else "macos" if sys.platform == "darwin" else "linux"
+    os_words = {"windows": "windows", "win": "windows", "linux": "linux", "macos": "macos", "mac": "macos", "osx": "macos"}
+
+    def shell(name: str) -> str:
+        return "bash" if "bash" in _read(root / name, 200).split("\n", 1)[0] else "sh"
+
+    for launcher in launchers:
+        name = lower.get(launcher)
+        if name:
+            command = q(name) if win else f"{shell(name)} {q(name)}"
+            out.append(Candidate(f"Run {name}", command, "launcher", tool=None if win else shell(name), notes=["the project's own start script"]))
+    ranked = sorted(names, key=lambda n: not re.match(r"(?i)(start|run|launch|play|webui)", n))
     for name in ranked:
         low = name.lower()
+        if low in launchers or NOT_LAUNCHER.match(name):
+            continue
+        if any(os_words.get(w, mine) != mine for w in re.split(r"[^a-z]+", low)):
+            continue  # e.g. start_macos.sh on Linux
         if win and low.endswith((".bat", ".cmd")):
             out.append(Candidate(f"Run {name}", q(name), "script"))
         elif win and low.endswith(".ps1"):
             out.append(Candidate(f"Run {name}", f"powershell -NoProfile -ExecutionPolicy Bypass -File {q(name)}", "script", tool="powershell"))
         elif not win and low.endswith(".sh") and re.match(r"(?i)(start|run|launch|play|serve)", name):
-            out.append(Candidate(f"Run {name}", f"sh {q(name)}", "script", tool="sh"))
+            out.append(Candidate(f"Run {name}", f"{shell(name)} {q(name)}", "script", tool=shell(name)))
     return out[:3]
 
 
@@ -343,6 +517,11 @@ def _static(root: Path, win: bool) -> list[Candidate]:
         if (root / folder / "index.html").is_file():
             target = folder or "."
             return [Candidate("Static website", f"{{repodock}} static {q(target)} --port {{port}}", "static", url="http://localhost:{port}/")]
+    # A collection of small sites, one per folder: serve them all with a list of folders.
+    sites = [p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".") and p.name not in SKIP and (p / "index.html").is_file()]
+    if len(sites) >= 2:
+        return [Candidate("Static websites", "{repodock} static . --port {port}", "static", url="http://localhost:{port}/",
+                          notes=[f"{len(sites)} small sites, one per folder: pick one from the list"])]
     return []
 
 

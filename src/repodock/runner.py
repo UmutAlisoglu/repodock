@@ -21,6 +21,7 @@ LOCAL_URL = re.compile(r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\])
 MAX_LINES = 3000
 # Child processes of a windowed app would each get a console window without this.
 NO_WINDOW = {"creationflags": 0x08000000} if sys.platform.startswith("win") else {}
+CREATE_NEW_CONSOLE = 0x00000010
 # Line numbers keep increasing across jobs, so a log view can keep appending
 # when an install is followed by a run, or a project is run again.
 _SEQ = itertools.count(1)
@@ -137,21 +138,37 @@ class Runner:
         return job
 
     def start(self, key: str, kind: str, command: str, cwd: Path, url: str | None = None, env: dict | None = None,
-              on_done: Callable[[Job], None] | None = None, label: str | None = None) -> Job:
-        """Run a shell command in ``cwd`` (the command string is what the user saw and approved)."""
+              on_done: Callable[[Job], None] | None = None, label: str | None = None, terminal: bool = False) -> Job:
+        """Run a shell command in ``cwd`` (the command string is what the user saw and approved).
+
+        With ``terminal`` (Windows only), it runs in its own console window instead, for
+        programs that need a real terminal (text interfaces, prompts). Its output then shows
+        there, not in repodock's log.
+        """
+        terminal = terminal and sys.platform.startswith("win")
         job = Job(key, kind, command, url=url, label=label)
         self._register(job)
         full_env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", "FORCE_COLOR": "0", "NO_COLOR": "1", **(env or {})}
         full_env.pop("VIRTUAL_ENV", None)  # don't leak repodock's own venv into the repo's commands
         options: dict = {}
-        if sys.platform.startswith("win"):
+        if terminal:
+            options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | CREATE_NEW_CONSOLE  # type: ignore[attr-defined]
+        elif sys.platform.startswith("win"):
             options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | NO_WINDOW["creationflags"]  # type: ignore[attr-defined]
         else:
             options["start_new_session"] = True  # own process group, so Stop reaches child processes
         job.log(f"$ {command}")
+        if terminal:
+            job.log("Running in its own terminal window.")
+            full_env.pop("NO_COLOR", None)
+            full_env.pop("FORCE_COLOR", None)
+            # Keep the window open after the program ends, so its last output can be read.
+            command = f"{command} & echo. & pause"
+            streams: dict = {}
+        else:
+            streams = {"stdin": subprocess.DEVNULL, "stdout": subprocess.PIPE, "stderr": subprocess.STDOUT}
         try:
-            job.proc = subprocess.Popen(command, shell=True, cwd=str(cwd), env=full_env, stdin=subprocess.DEVNULL,
-                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **options)
+            job.proc = subprocess.Popen(command, shell=True, cwd=str(cwd), env=full_env, **streams, **options)
         except OSError as exc:
             job.error = str(exc)
             job.exit_code = -1
@@ -161,10 +178,11 @@ class Runner:
             return job
 
         def pump() -> None:
-            assert job.proc is not None and job.proc.stdout is not None
-            for raw in iter(job.proc.stdout.readline, b""):
-                job.log(_decode(raw).rstrip("\r\n"))
-            job.proc.stdout.close()
+            assert job.proc is not None
+            if job.proc.stdout is not None:
+                for raw in iter(job.proc.stdout.readline, b""):
+                    job.log(_decode(raw).rstrip("\r\n"))
+                job.proc.stdout.close()
             job.exit_code = job.proc.wait()
             job.ended = time.time()
             if job.stopping:

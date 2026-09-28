@@ -10,7 +10,7 @@ command, a Run/Stop button, live output with CPU and memory use, and buttons to
 update, configure or delete it. It never installs or runs anything without
 asking first. Works on Windows, macOS and Linux.
 
-![repodock with five projects, one running with its CPU and memory use](docs/dashboard.png)
+![Pasting a GitHub link into repodock: it downloads JS Paint, asks before installing its dependencies, runs it, and the app opens](docs/demo.gif)
 
 ## What it does
 
@@ -20,7 +20,12 @@ asking first. Works on Windows, macOS and Linux.
   with Windows, minimised to the tray.
 - **Runs almost anything**: Node.js, Python, Go, Rust, .NET, Java, Docker,
   Makefiles, Windows programs and static websites (see the table below), or a
-  ready-made program from the project's **GitHub Releases**.
+  ready-made program from the project's **GitHub Releases**. When a release has
+  a download for your system, the card offers it, since that's usually quicker
+  than building the project.
+- **Terminal programs** (text interfaces like `glow`) can run in their own
+  terminal window on Windows; the card suggests it when a program complains
+  that it needs a terminal.
 - **Live stats** per running app: CPU, memory (the whole process tree),
   uptime, and an **Open in browser** button as soon as the app prints a
   localhost address. **Stop all** in one click.
@@ -44,7 +49,7 @@ asking first. Works on Windows, macOS and Linux.
 - **Export and import** your library (projects, commands, tags and settings,
   not `.env` secrets) to move to another computer.
 
-![The same projects as a list, in dark mode](docs/list-dark.png)
+![repodock with five projects, one running with its CPU and memory use](docs/dashboard.png)
 
 ## Download for Windows
 
@@ -68,6 +73,16 @@ box) and can be removed from Windows Settings > Apps like any other program.
   [Python](https://www.python.org/downloads/), a Node.js project needs
   [Node.js](https://nodejs.org/), and so on. The card tells you when something
   is missing. [Git](https://git-scm.com/downloads) is optional.
+
+## Install with Scoop (Windows)
+
+```powershell
+scoop bucket add repodock https://github.com/UmutAlisoglu/repodock
+scoop install repodock
+```
+
+That's the portable version: `repodock` in a terminal, and a Start Menu
+shortcut for the app window. `scoop update repodock` gets new versions.
 
 ## Install with pipx (macOS, Linux, Windows)
 
@@ -141,7 +156,7 @@ pick another suggestion or type your own, and it's remembered per project.
 | Project | Suggested command | Dependencies (asked first) |
 |---|---|---|
 | Node.js | `npm run dev`, `npm start`, or `node main.js` (pnpm, Yarn and Bun detected from the lockfile) | `npm install` / `npm ci` / `pnpm install` / ... |
-| Python | `python main.py` (also `app.py`, `run.py`, ...), `python -m package`, Django `manage.py runserver`, Streamlit, or the project's own command from `pyproject.toml` | a `.venv` in the project, then `pip install -r requirements.txt` and/or `pip install -e .` |
+| Python | the script the README says to run, `python main.py` (also `app.py`, `launch.py`, `webui.py`, ...), Django `manage.py runserver`, Flask, FastAPI (uvicorn), Streamlit, `python -m package`, or the project's own command from `pyproject.toml` | a `.venv` in the project, then `pip install -r requirements.txt` (or `requirements/dev.txt`, ...) and/or `pip install -e .` |
 | Go | `go run .` or `go run ./cmd/<name>` | downloaded by Go |
 | Rust | `cargo run --release` | downloaded by Cargo |
 | .NET | `dotnet run --project <App>.csproj` | restored by dotnet |
@@ -149,10 +164,10 @@ pick another suggestion or type your own, and it's remembered per project.
 | Deno | `deno task dev` / `start` | |
 | Makefile | `make run` / `start` / `serve` / `dev` | |
 | Procfile | the `web:` command | |
-| Docker | `docker compose up --build`, or build and run the Dockerfile | |
+| Docker | `docker compose up --build` (first choice when it starts three or more services), or build and run the Dockerfile | |
+| Start scripts | the project's own launcher first: `start_windows.bat`, `webui-user.bat`, `start.bat`, ... (`start_linux.sh`, `webui.sh`, `start.sh`, ... on macOS and Linux) | |
 | Windows programs | a `.exe`, `.bat`, `.cmd` or `.ps1` in the project | |
-| Shell scripts | `start.sh`, `run.sh`, ... on macOS and Linux | |
-| Static website | serves `index.html` (or `public/`, `docs/`, `dist/`) on a local port | |
+| Static website | serves `index.html` (or `public/`, `docs/`, `dist/`) on a local port, or a list of folders when each one is its own small site | |
 
 When a command needs a program you don't have (Node.js, Go, Docker, ...),
 the card says so.
@@ -202,7 +217,9 @@ network. CI runs them on Linux (Python 3.9 to 3.13), Windows and macOS. The
 Windows workflow builds `repodock.exe` and `repodock-cli.exe` with PyInstaller
 (`packaging/windows/repodock.spec`), opens the app window and quits it, then
 builds and silently installs the Inno Setup installer. Publishing a GitHub
-release attaches the installer and the portable zip to it.
+release attaches the installer and the portable zip to it, updates the Scoop
+manifest in `bucket/`, and saves winget manifests (made by
+`packaging/manifests.py`) as a workflow artifact.
 
 ## License
 
