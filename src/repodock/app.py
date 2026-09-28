@@ -193,8 +193,10 @@ class Dock:
             raise DockError("a link has to name a repository")
         with self._lock:
             self.link_request = {"id": next(self._event_ids), "repo": key}
-        if self.show_window:
-            self.show_window()
+        show = self.show_window
+        if show:
+            # Not on this thread: the window can be busy, and whoever sent the link shouldn't wait for it.
+            threading.Thread(target=show, daemon=True).start()
         return self.link_request
 
     def link_done(self, request_id: int) -> None:

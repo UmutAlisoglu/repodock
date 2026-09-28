@@ -46,6 +46,7 @@ jobs:
           "browser mode answered, version $($state.version)"
 
       - name: Test the app window
+        timeout-minutes: 10
         shell: pwsh
         run: |
           $env:REPODOCK_DIR = "$env:RUNNER_TEMP\repodock-app"
@@ -64,16 +65,20 @@ jobs:
           "mode: $($state.app.mode), tray: $($state.app.tray)"
           if ($state.app.mode -ne "window") { Get-Content "$env:LOCALAPPDATA\repodock\repodock.log" -ErrorAction SilentlyContinue; throw "the app window did not open" }
           # Starting it again shows the running one instead of a second copy.
-          $out = & "dist\repodock\repodock-cli.exe" 2>&1 | Out-String
+          $out = & "dist\repodock\repodock-cli.exe" --no-open 2>&1 | Out-String
           $out
           if ($out -notmatch "already running") { throw "a second repodock started" }
           # A repodock:// link reaches the running one, which asks on the page whether to add the project.
-          & "dist\repodock\repodock-cli.exe" "repodock://UmutAlisoglu/repodock" 2>&1 | Out-String
-          $state = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/state"
-          if ($state.link_request.repo -ne "UmutAlisoglu/repodock") { throw "the repodock:// link didn't arrive" }
+          # Started without a pipe and with a time limit, so a stuck hand-off fails the step instead of hanging it.
+          $cli = Start-Process -FilePath "dist\repodock\repodock-cli.exe" -ArgumentList "repodock://UmutAlisoglu/repodock" -PassThru -NoNewWindow `
+            -RedirectStandardOutput "$env:RUNNER_TEMP\link-out.txt" -RedirectStandardError "$env:RUNNER_TEMP\link-err.txt"
+          if (-not $cli.WaitForExit(30000)) { Stop-Process -Id $cli.Id -Force; throw "repodock-cli.exe didn't return after handing over the link" }
+          Get-Content "$env:RUNNER_TEMP\link-out.txt", "$env:RUNNER_TEMP\link-err.txt"
+          $state = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/state" -TimeoutSec 10
+          if ($state.link_request.repo -ne "UmutAlisoglu/repodock") { Get-Content "$env:LOCALAPPDATA\repodock\repodock.log" -ErrorAction SilentlyContinue; throw "the repodock:// link didn't arrive" }
           "link arrived: $($state.link_request.repo)"
           # Quit from the page's Settings > Quit.
-          Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$port/api/quit" -Headers @{ "X-Repodock" = "1" } -ContentType "application/json" -Body "{}"
+          Invoke-RestMethod -Method Post -TimeoutSec 10 -Uri "http://127.0.0.1:$port/api/quit" -Headers @{ "X-Repodock" = "1" } -ContentType "application/json" -Body "{}"
           if (-not $app.WaitForExit(20000)) { Stop-Process -Id $app.Id -Force; throw "repodock.exe did not quit" }
           if (Test-Path $instance) { throw "instance file was left behind" }
           "app window opened and quit cleanly"

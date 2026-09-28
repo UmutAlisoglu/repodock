@@ -112,7 +112,8 @@ def _running_instance(dock: Dock) -> int | None:
         return None
 
 
-def _bring_to_front(port: int, link: str | None = None) -> bool:
+def _bring_to_front(port: int, link: str | None = None) -> bool | None:
+    """Whether the running repodock showed its window (None when it didn't answer)."""
     path, body = ("/api/open-link", {"link": link}) if link else ("/api/show", {})
     req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=json.dumps(body).encode(), method="POST",
                                  headers={"X-Repodock": "1", "Content-Type": "application/json"})
@@ -121,7 +122,7 @@ def _bring_to_front(port: int, link: str | None = None) -> bool:
         with opener.open(req, timeout=5) as resp:
             return bool(json.load(resp).get("shown"))
     except (OSError, ValueError):
-        return False
+        return None
 
 
 def cmd_serve(dock: Dock, args) -> int:
@@ -134,7 +135,9 @@ def cmd_serve(dock: Dock, args) -> int:
     if existing:
         # Only one repodock per folder: show the one that's running instead.
         url = f"http://localhost:{existing}/"
-        if not _bring_to_front(existing, args.open_link) and not args.no_open:
+        shown = _bring_to_front(existing, args.open_link)
+        # If a link didn't get through, don't open a tab that couldn't show it.
+        if not shown and not args.no_open and not (args.open_link and shown is None):
             webbrowser.open(url)
         print(f"repodock is already running at {url}", file=sys.stderr)
         return EXIT_OK

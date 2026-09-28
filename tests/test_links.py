@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 import unittest
 from unittest import mock
 
@@ -51,11 +52,11 @@ class DockLinkTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_link_request_waits_for_the_page(self):
-        shown = []
-        self.dock.show_window = lambda: shown.append(True)
+        shown = threading.Event()
+        self.dock.show_window = shown.set
         req = self.dock.open_link("repodock://octo/app")
         self.assertEqual(self.dock.state()["link_request"], req)
-        self.assertEqual(shown, [True])
+        self.assertTrue(shown.wait(5))
         self.assertEqual(self.dock.lookup("octo/app")["description"], "An app")
         self.dock.link_done(req["id"] + 1)  # an older answer doesn't clear a newer link
         self.assertIsNotNone(self.dock.state()["link_request"])
