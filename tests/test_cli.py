@@ -82,6 +82,14 @@ class CliTests(unittest.TestCase):
             code, _, err = run("--dir", str(root), "--no-open")
             self.assertEqual(code, EXIT_OK)
             self.assertIn("already running", err)
+            # A repodock:// link goes to the running one, which asks about it on the page.
+            os.environ["REPODOCK_DIR"] = str(root)
+            from unittest import mock
+            with mock.patch("webbrowser.open") as browser:  # no app window here, so it opens the browser tab
+                code, _, err = run("repodock://octo/app", "--dir", "/somewhere/else")  # options next to a link are ignored
+            browser.assert_called_once()
+            self.assertEqual(code, EXIT_OK)
+            self.assertEqual(dock.state()["link_request"]["repo"], "octo/app")
         finally:
             server.shutdown()
             server.server_close()

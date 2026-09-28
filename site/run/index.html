@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run with repodock</title>
+<meta name="description" content="Open a GitHub project in repodock, which downloads it and runs it from a local dashboard.">
+<meta name="robots" content="noindex">
+<link rel="icon" href="../icon.png">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top"><img src="../icon.png" alt=""><b>repodock</b><nav><a href="../">About repodock</a></nav></header>
+
+  <div class="panel" style="margin-top:20px">
+    <div id="bad" class="hide">
+      <h1 style="margin-top:0">That link is missing the project</h1>
+      <p>A "Run with repodock" link ends with the project, like <code>run/#owner/project</code>.</p>
+      <a class="btn" href="../">Go to the repodock page</a>
+    </div>
+    <div id="good" class="hide">
+      <p class="small" style="margin:0">Run with repodock</p>
+      <h1 style="margin:4px 0 6px"><span id="name"></span></h1>
+      <p id="desc" class="lead" style="margin-bottom:18px"></p>
+      <div class="row">
+        <a class="btn primary" id="open" href="#">Open in repodock</a>
+        <a class="btn" id="gh" href="#">View on GitHub</a>
+      </div>
+      <p class="small" id="status" style="margin:14px 0 0">Your browser may ask whether to open repodock. repodock then asks before it downloads or runs anything.</p>
+    </div>
+  </div>
+
+  <section id="get" style="border-top:0">
+    <h2>Don't have repodock yet?</h2>
+    <p>repodock is a free app that downloads GitHub projects, works out how to start them, and runs them from one window.
+      It shows you every command before it runs.</p>
+    <div class="grid">
+      <div class="card"><b>Windows</b><p>Install it, then click the button above again.</p>
+        <p style="margin-top:10px"><a class="btn primary" href="https://github.com/UmutAlisoglu/repodock/releases/latest/download/repodock-setup.exe">Download repodock</a></p></div>
+      <div class="card"><b>Linux</b><p>Install with pipx, start repodock, and turn on "Open Run with repodock links" in its Settings.</p>
+        <pre>pipx install git+https://github.com/UmutAlisoglu/repodock</pre></div>
+      <div class="card"><b>macOS, or no install</b><p>Start repodock and paste the project into it:</p>
+        <pre id="paste"></pre></div>
+    </div>
+  </section>
+  <footer><a href="../">repodock</a> · <a href="https://github.com/UmutAlisoglu/repodock">Source on GitHub</a></footer>
+</div>
+<script>
+const NAME = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
+const raw = decodeURIComponent((location.hash.slice(1) || new URLSearchParams(location.search).get("repo") || "").trim()).replace(/\/+$/, "");
+const repo = NAME.test(raw) && !raw.includes("..") ? raw : null;
+if (!repo) {
+  document.getElementById("bad").classList.remove("hide");
+} else {
+  document.getElementById("good").classList.remove("hide");
+  document.title = `Run ${repo} with repodock`;
+  document.getElementById("name").textContent = repo;
+  document.getElementById("paste").textContent = `https://github.com/${repo}`;
+  const link = `repodock://${repo}`;
+  document.getElementById("open").href = link;
+  document.getElementById("gh").href = `https://github.com/${repo}`;
+  // If repodock opens, this tab loses focus. Otherwise point at the download.
+  let left = false;
+  window.addEventListener("blur", () => { left = true; });
+  document.addEventListener("visibilitychange", () => { if (document.hidden) left = true; });
+  document.getElementById("open").addEventListener("click", () => {
+    left = false;
+    setTimeout(() => {
+      document.getElementById("status").textContent = left
+        ? "Opened in repodock. You can close this tab."
+        : "Nothing happened? repodock probably isn't installed yet. See below.";
+    }, 2500);
+  });
+  fetch(`https://api.github.com/repos/${repo}`).then(r => r.ok ? r.json() : null).then(r => {
+    if (r && r.description) document.getElementById("desc").textContent = r.description;
+  }).catch(() => {});
+}
+</script>
+</body>
+</html>

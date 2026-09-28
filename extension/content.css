@@ -1,0 +1,7 @@
+.repodock-run { display: inline-flex !important; align-items: center; gap: 4px; }
+.repodock-run .repodock-icon { color: #0f766e; margin-right: 0 !important; }
+.repodock-download { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 12px 0 0; }
+.repodock-download .btn { display: inline-flex; align-items: center; gap: 4px; }
+.repodock-file { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.repodock-note { font-size: 12px; color: var(--fgColor-muted, #59636e); }
+li.repodock-best { box-shadow: inset 3px 0 0 #0f766e; }

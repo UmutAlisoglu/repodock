@@ -13,7 +13,7 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
-from . import __version__
+from . import __version__, links
 from .app import Dock, DockError
 from .detect import detect, expand, missing_tool
 from .github import API, GitHub, find_token
@@ -68,7 +68,14 @@ def make_dock(args, token: str | None = None) -> Dock:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # A repodock:// link, passed by the system when someone clicks "Run with repodock".
+    link = next((a for a in argv if links.is_link(a)), None)
+    if link:
+        # Only the link counts: the rest of the command line comes from a web page, so it's ignored.
+        argv = []
     args = build_parser().parse_args(argv)
+    args.open_link = link
     command = args.command or "serve"
     try:
         if command == "detect":
@@ -105,8 +112,9 @@ def _running_instance(dock: Dock) -> int | None:
         return None
 
 
-def _bring_to_front(port: int) -> bool:
-    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/show", data=b"{}", method="POST",
+def _bring_to_front(port: int, link: str | None = None) -> bool:
+    path, body = ("/api/open-link", {"link": link}) if link else ("/api/show", {})
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=json.dumps(body).encode(), method="POST",
                                  headers={"X-Repodock": "1", "Content-Type": "application/json"})
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
@@ -126,7 +134,7 @@ def cmd_serve(dock: Dock, args) -> int:
     if existing:
         # Only one repodock per folder: show the one that's running instead.
         url = f"http://localhost:{existing}/"
-        if not _bring_to_front(existing) and not args.no_open:
+        if not _bring_to_front(existing, args.open_link) and not args.no_open:
             webbrowser.open(url)
         print(f"repodock is already running at {url}", file=sys.stderr)
         return EXIT_OK
@@ -139,6 +147,11 @@ def cmd_serve(dock: Dock, args) -> int:
         server = make_server(dock, 0, args.verbose)  # the app window doesn't care which port it uses
     port = server.server_address[1]
     url = f"http://localhost:{port}/"
+    if args.open_link:
+        try:
+            dock.open_link(args.open_link)  # the page asks whether to add it
+        except DockError as exc:
+            dock.event("link", "", f"That repodock link didn't work: {exc}")
     dock.store.data_dir.mkdir(parents=True, exist_ok=True)
     _instance_file(dock).write_text(json.dumps({"port": port, "pid": os.getpid()}), encoding="utf-8")
     dock.start_background()

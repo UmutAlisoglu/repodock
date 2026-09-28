@@ -636,6 +636,9 @@ function appSettings() {
     const auto = st.app.autostart_supported ? $("label", { class: "check" }, $("input", { type: "checkbox", checked: st.app.autostart,
       onchange: async e => { try { await api("/api/settings", { changes: { start_with_windows: e.target.checked } }); refresh(); } catch (err) { e.target.checked = !e.target.checked; fail(err); } } }),
       $("div", {}, "Start with Windows", $("small", {}, "Opens in the tray when you sign in."))) : null;
+    const linkToggle = st.app.links_supported ? $("label", { class: "check" }, $("input", { type: "checkbox", checked: st.app.links,
+      onchange: async e => { try { await api("/api/settings", { changes: { open_links: e.target.checked } }); refresh(); } catch (err) { e.target.checked = !e.target.checked; fail(err); } } }),
+      $("div", {}, "Open \u201cRun with repodock\u201d links", $("small", {}, "Buttons on GitHub pages and READMEs open the project here. The installer turns this on."))) : null;
     b.append($("h3", {}, "Settings"),
       $("div", { class: "settings-grid" },
         $("b", {}, "Theme"), seg("theme", [["system", "System"], ["light", "Light"], ["dark", "Dark"]]),
@@ -646,7 +649,7 @@ function appSettings() {
         $("b", {}, "Behaviour"), $("div", { style: "display:flex;flex-direction:column;gap:8px" },
           toggle("notify", "Tell me when an app crashes"),
           toggle("check_updates", "Check for updates in the background", "Runs git fetch every 30 minutes."),
-          st.app.tray ? toggle("close_to_tray", "Closing the window keeps repodock in the tray") : null, auto),
+          st.app.tray ? toggle("close_to_tray", "Closing the window keeps repodock in the tray") : null, auto, linkToggle),
         $("b", {}, "Library"), $("div", { class: "actions" },
           $("button", { type: "button", onclick: exportLibrary }, "Export..."),
           $("button", { type: "button", onclick: () => document.getElementById("import-file").click() }, "Import..."),
@@ -735,6 +738,32 @@ function palette() {
     b.append(input, list);
     draw();
   }, "palette");
+}
+
+// repodock:// links ("Run with repodock" buttons) --------------------------------------
+let linkShown = null;
+async function handleLink(state) {
+  const req = state.link_request;
+  if (!req || req.id === linkShown) return;
+  linkShown = req.id;
+  const done = () => api("/api/link-done", { id: req.id }).catch(() => {});
+  if (state.repos.some(r => r.key.toLowerCase() === req.repo.toLowerCase())) {
+    const key = state.repos.find(r => r.key.toLowerCase() === req.repo.toLowerCase()).key;
+    done(); jumpTo(key); toast(`${key} is already in repodock`); return;
+  }
+  const ok = await dialog((b, close) => {
+    const info = $("div", { class: "hint" }, "Looking it up on GitHub...");
+    b.append($("h3", {}, `Add ${req.repo}?`),
+      $("p", {}, "A \u201cRun with repodock\u201d link asked to download this project from GitHub. Nothing runs until you press Run and confirm the command."),
+      info, $("div", { class: "buttons" }, cancelBtn(close), $("button", { type: "button", class: "primary", onclick: () => close(true) }, "Add to repodock")));
+    api("/api/lookup", { repo: req.repo }).then(r => info.replaceChildren(
+      r.description ? $("div", {}, r.description) : $("div", {}, "No description."),
+      $("div", { class: "sub" }, [r.language, r.stars !== undefined ? `\u2605 ${r.stars}` : null, r.pushed_at ? `updated ${ago(r.pushed_at)}` : null, r.archived ? "archived" : null].filter(Boolean).join(" \u00b7 "))))
+      .catch(e => info.replaceChildren($("span", { class: "bad" }, e.message)));
+  });
+  done();
+  if (!ok) return;
+  try { const res = await api("/api/add", { input: req.repo }); openLogs.add(res.key); refresh(); setTimeout(() => jumpTo(res.key), 300); } catch (e) { fail(e); }
 }
 
 function jumpTo(key) {
@@ -1140,6 +1169,7 @@ function summary(state) {
 
 function render(state) {
   lastState = state;
+  setTimeout(() => handleLink(state), 0);
   settings = state.settings; applyTheme(settings);
   notifyEvents(state);
   banners(state);

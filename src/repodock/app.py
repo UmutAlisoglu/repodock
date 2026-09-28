@@ -18,7 +18,7 @@ import webbrowser
 from pathlib import Path
 from typing import Callable
 
-from . import __version__, autostart, disk, envfile, fetch, toolchain
+from . import __version__, autostart, disk, envfile, fetch, links, toolchain
 from .detect import Candidate, detect, expand, free_port, is_windows, missing_tool, q
 from .github import GitHub, GitHubError, NotFound, Target, parse, summarize, summarize_release
 from .procstats import Sampler
@@ -61,6 +61,7 @@ class Dock:
         self.quit: Callable[[], None] | None = None  # set by the desktop app
         self.listeners: list[Callable[[dict], None]] = []  # told about crashes (tray notifications)
         self.events: collections.deque = collections.deque(maxlen=50)
+        self.link_request: dict | None = None  # a repodock:// link waiting for an answer on the page
         self._event_ids = itertools.count(1)
         self._restarts: dict[str, list[float]] = {}
         self._detected: dict[str, list[Candidate]] = {}
@@ -171,12 +172,44 @@ class Dock:
             "me": self.me,
             "git": self.use_git,
             "platform": sys.platform,
-            "app": {**self.app, "can_quit": self.quit is not None, "autostart_supported": autostart.supported(), "autostart": autostart.enabled()},
+            "app": {**self.app, "can_quit": self.quit is not None, "autostart_supported": autostart.supported(), "autostart": autostart.enabled(),
+                    "links_supported": links.supported(), "links": links.registered()},
+            "link_request": self.link_request,
             "settings": self.store.settings(),
             "events": list(self.events),
             "tools": tools,
             "repos": sorted((self.repo_view(k, r, stats) for k, r in repos.items()), key=lambda r: (r["key"].split("/")[0].lower(), r["key"].lower())),
         }
+
+    # repodock:// links ------------------------------------------------------
+
+    def open_link(self, link: str) -> dict:
+        """A "Run with repodock" link was opened: ask on the page whether to add that project."""
+        try:
+            key = links.parse_link(link) if links.is_link(link) else parse(link).full_name
+        except ValueError as exc:
+            raise DockError(str(exc)) from None
+        if "/" not in key:
+            raise DockError("a link has to name a repository")
+        with self._lock:
+            self.link_request = {"id": next(self._event_ids), "repo": key}
+        if self.show_window:
+            self.show_window()
+        return self.link_request
+
+    def link_done(self, request_id: int) -> None:
+        with self._lock:
+            if self.link_request and self.link_request["id"] == request_id:
+                self.link_request = None
+
+    def lookup(self, key: str) -> dict:
+        """What GitHub says about a repository, to show before adding it."""
+        try:
+            return summarize(self.gh.repo(key))
+        except NotFound:
+            raise DockError(f"{key} isn't on GitHub (or it's private)") from None
+        except GitHubError as exc:
+            raise DockError(str(exc)) from None
 
     # Adding ---------------------------------------------------------------
 
@@ -796,6 +829,11 @@ class Dock:
 
     def set_settings(self, changes: dict) -> dict:
         changes = dict(changes)
+        if "open_links" in changes:
+            try:
+                links.register(bool(changes.pop("open_links")))
+            except OSError as exc:
+                raise DockError(str(exc)) from None
         if "start_with_windows" in changes:
             try:
                 autostart.set_enabled(bool(changes.pop("start_with_windows")))

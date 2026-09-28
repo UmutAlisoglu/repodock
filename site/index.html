@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>repodock: run GitHub projects in one click</title>
+<meta name="description" content="Paste a GitHub link, and repodock downloads the project and runs it from a local dashboard. Free for Windows, macOS and Linux.">
+<meta property="og:title" content="repodock">
+<meta property="og:description" content="Paste a GitHub link, and repodock downloads the project and runs it from a local dashboard.">
+<meta property="og:image" content="https://umutalisoglu.github.io/repodock/dashboard.png">
+<link rel="icon" href="icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <img src="icon.png" alt=""><b>repodock</b>
+    <nav><a href="#download">Download</a><a href="#badge">Run button</a><a href="#extension">Extension</a><a href="https://github.com/UmutAlisoglu/repodock">GitHub</a></nav>
+  </header>
+
+  <h1>Run any GitHub project<br>without the setup.</h1>
+  <p class="lead">Paste a link, and repodock downloads the project, works out how to start it, and runs it from one window,
+    with live output, CPU and memory use, and an Open in browser button. It asks before it installs or runs anything.</p>
+  <div class="row">
+    <a class="btn primary" href="https://github.com/UmutAlisoglu/repodock/releases/latest/download/repodock-setup.exe">Download for Windows</a>
+    <a class="btn" href="#download">macOS and Linux</a>
+    <span class="small">Free and open source (MIT).</span>
+  </div>
+  <img class="demo" src="demo.gif" alt="Pasting a GitHub link into repodock: it downloads JS Paint, asks before installing its dependencies, runs it, and the app opens" width="960" height="570">
+
+  <section>
+    <div class="grid">
+      <div class="card"><b>Runs almost anything</b><p>Node.js, Python (Flask, FastAPI, Streamlit, Django), Go, Rust, .NET, Java, Docker Compose, static sites, a project's own start script, or a ready-made download from its releases.</p></div>
+      <div class="card"><b>Nothing runs without your say-so</b><p>You see the exact command first. Dependencies install only when you agree, and Python ones go into the project's own folder.</p></div>
+      <div class="card"><b>A real dashboard</b><p>Live output, CPU and memory for the whole process tree, update badges, .env editor, logs of past runs, and one-click Stop all.</p></div>
+      <div class="card"><b>Made for Windows</b><p>A normal installer with its own window and tray icon, so your apps keep running when you close it. Also on macOS and Linux.</p></div>
+    </div>
+  </section>
+
+  <section id="download">
+    <h2>Download</h2>
+    <div class="grid">
+      <div class="card"><b>Windows installer</b><p>No admin rights or Python needed.</p>
+        <p style="margin-top:10px"><a class="btn primary" href="https://github.com/UmutAlisoglu/repodock/releases/latest/download/repodock-setup.exe">repodock-setup.exe</a></p>
+        <p class="small" style="margin-top:8px">If Windows says it protected your PC, click More info, then Run anyway.</p></div>
+      <div class="card"><b>Scoop (Windows)</b>
+        <div class="copy"><pre>scoop bucket add repodock https://github.com/UmutAlisoglu/repodock
+scoop install repodock</pre></div></div>
+      <div class="card"><b>pipx (macOS, Linux, Windows)</b>
+        <div class="copy"><pre>pipx install git+https://github.com/UmutAlisoglu/repodock</pre></div>
+        <p class="small">Opens in your browser. Needs Python 3.9 or newer.</p></div>
+    </div>
+  </section>
+
+  <section id="badge">
+    <h2>Add a "Run with repodock" button to your README</h2>
+    <p>People who have repodock can open your project with one click. Everyone else gets a page that explains how to get it.</p>
+    <div class="panel">
+      <label for="repo" class="small">Your repository</label>
+      <div class="row" style="margin:6px 0 14px"><input type="text" id="repo" placeholder="owner/project or a GitHub link" spellcheck="false" autocomplete="off"></div>
+      <p class="small" style="margin:0 0 6px">Preview</p>
+      <a id="preview-link" href="run/#UmutAlisoglu/repodock"><img src="badge.svg" alt="Run with repodock" width="132" height="20"></a>
+      <p class="small" style="margin:16px 0 0">Markdown</p>
+      <div class="copy"><pre id="md"></pre><button type="button" data-copy="md">Copy</button></div>
+      <p class="small" style="margin:10px 0 0">HTML</p>
+      <div class="copy"><pre id="html"></pre><button type="button" data-copy="html">Copy</button></div>
+    </div>
+  </section>
+
+  <section id="extension">
+    <h2>Browser extension</h2>
+    <p>Adds a "Run with repodock" button to every GitHub project page, and a "Download for your system" button to release pages that picks the right file for your computer.
+      For Chrome, Edge and Firefox. <a href="https://github.com/UmutAlisoglu/repodock/tree/main/extension">How to install it</a>.</p>
+  </section>
+
+  <footer>repodock is made by <a href="https://github.com/UmutAlisoglu">UmutAlisoglu</a>. <a href="https://github.com/UmutAlisoglu/repodock">Source on GitHub</a>.</footer>
+</div>
+<script>
+const NAME = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
+const BASE = "https://umutalisoglu.github.io/repodock/";
+function repoFrom(text) {
+  let s = text.trim().replace(/\.git$/, "").replace(/\/+$/, "");
+  const m = s.match(/github\.com\/([^/]+\/[^/?#]+)/i);
+  if (m) s = m[1];
+  return NAME.test(s) ? s : null;
+}
+function update() {
+  const repo = repoFrom(document.getElementById("repo").value) || "owner/project";
+  const link = `${BASE}run/#${repo}`;
+  document.getElementById("md").textContent = `[![Run with repodock](${BASE}badge.svg)](${link})`;
+  document.getElementById("html").textContent = `<a href="${link}"><img src="${BASE}badge.svg" alt="Run with repodock"></a>`;
+  document.getElementById("preview-link").href = `run/#${repo}`;
+}
+document.getElementById("repo").addEventListener("input", update);
+for (const pre of document.querySelectorAll(".copy pre")) {
+  if (pre.nextElementSibling) continue;
+  const b = document.createElement("button"); b.type = "button"; b.textContent = "Copy"; b.dataset.copyText = "1"; pre.after(b);
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest(".copy button"); if (!b) return;
+  const text = b.previousElementSibling.textContent;
+  navigator.clipboard.writeText(text).then(() => { b.textContent = "Copied"; setTimeout(() => b.textContent = "Copy", 1500); });
+});
+update();
+</script>
+</body>
+</html>

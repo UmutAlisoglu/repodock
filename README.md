@@ -148,6 +148,22 @@ A GitHub token is optional. repodock uses `GITHUB_TOKEN`, `GH_TOKEN` or your
 GitHub CLI login when present, which raises the API rate limit and lets it
 recognize your own repositories.
 
+## "Run with repodock" buttons
+
+[![Run with repodock](https://umutalisoglu.github.io/repodock/badge.svg)](https://umutalisoglu.github.io/repodock/run/#UmutAlisoglu/repodock)
+
+Links like `repodock://owner/project` open that project in repodock, which asks
+whether to add it (nothing runs until you press Run). The Windows installer
+sets this up; with pipx or the portable zip, turn on **Open "Run with repodock"
+links** in Settings (Windows and Linux).
+
+- **For your README:** make a button like the one above at
+  [umutalisoglu.github.io/repodock](https://umutalisoglu.github.io/repodock/#badge).
+  It links to a page that opens repodock, or explains how to get it.
+- **Browser extension:** adds a Run with repodock button to every GitHub project,
+  and a "Download for Windows" button on release pages that picks the right file
+  for your computer. See [extension/](extension/).
+
 ## How it runs projects
 
 repodock looks at the files in the project and suggests a run command. You can

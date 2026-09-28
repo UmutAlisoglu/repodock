@@ -67,6 +67,11 @@ jobs:
           $out = & "dist\repodock\repodock-cli.exe" 2>&1 | Out-String
           $out
           if ($out -notmatch "already running") { throw "a second repodock started" }
+          # A repodock:// link reaches the running one, which asks on the page whether to add the project.
+          & "dist\repodock\repodock-cli.exe" "repodock://UmutAlisoglu/repodock" 2>&1 | Out-String
+          $state = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/state"
+          if ($state.link_request.repo -ne "UmutAlisoglu/repodock") { throw "the repodock:// link didn't arrive" }
+          "link arrived: $($state.link_request.repo)"
           # Quit from the page's Settings > Quit.
           Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$port/api/quit" -Headers @{ "X-Repodock" = "1" } -ContentType "application/json" -Body "{}"
           if (-not $app.WaitForExit(20000)) { Stop-Process -Id $app.Id -Force; throw "repodock.exe did not quit" }
@@ -94,6 +99,9 @@ jobs:
           & "$installed\repodock-cli.exe" --version
           if ($LASTEXITCODE -ne 0) { throw "installed exe failed" }
           if (-not (Test-Path "$installed\repodock.exe")) { throw "repodock.exe missing" }
+          $handler = (Get-ItemProperty "HKCU:\Software\Classes\repodock\shell\open\command")."(default)"
+          "repodock:// opens: $handler"
+          if ($handler -notmatch "repodock.exe") { throw "repodock:// links aren't registered" }
 
       - uses: actions/upload-artifact@v4
         with:

@@ -154,6 +154,9 @@ ACTIONS = {
     "/api/settings": lambda d, b: {"settings": d.set_settings(dict(b["changes"]))},
     "/api/import": lambda d, b: d.import_(b["library"]),
     "/api/show": _show,
+    "/api/open-link": lambda d, b: {**d.open_link(str(b.get("link", ""))), "shown": bool(d.show_window)},
+    "/api/link-done": lambda d, b: (d.link_done(int(b.get("id", 0))), None)[1],
+    "/api/lookup": lambda d, b: d.lookup(str(b["repo"])),
     "/api/quit": _quit,
 }
 

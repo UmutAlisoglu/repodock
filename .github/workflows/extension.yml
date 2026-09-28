@@ -1,0 +1,38 @@
+name: Browser extension
+
+on:
+  push:
+    branches: [main]
+    paths: ["extension/**", ".github/workflows/extension.yml"]
+  pull_request:
+    paths: ["extension/**"]
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Test
+        run: |
+          node extension/test.js
+          node --check extension/content.js
+          node -e "const m = require('./extension/manifest.json'); for (const f of [...m.content_scripts[0].js, ...m.content_scripts[0].css, ...Object.values(m.icons)]) require('fs').accessSync('extension/' + f); console.log('manifest', m.version, 'ok')"
+      - name: Package
+        run: cd extension && zip -r ../repodock-extension.zip manifest.json fit.js content.js content.css icons README.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: repodock-extension
+          path: repodock-extension.zip
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" repodock-extension.zip --clobber

@@ -47,6 +47,10 @@ Filename: "{app}\repodock.exe"; Description: "Start repodock now"; Flags: nowait
 [Registry]
 ; "Start with Windows" is switched on inside repodock; remove it when repodock is uninstalled.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "repodock"; Flags: uninsdeletevalue dontcreatekey
+; repodock:// links: "Run with repodock" buttons on web pages open the project in repodock.
+Root: HKCU; Subkey: "Software\Classes\repodock"; ValueType: string; ValueName: ""; ValueData: "URL:repodock link"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\repodock"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\repodock\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\repodock.exe"" ""%1"""
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
