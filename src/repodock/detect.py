@@ -162,7 +162,11 @@ def _node(root: Path, win: bool) -> list[Candidate]:
         pkg = json.loads(_read(pkg_path))
     except ValueError:
         pkg = {}
-    scripts = pkg.get("scripts") or {}
+    if not isinstance(pkg, dict):
+        return []
+    scripts = pkg.get("scripts")
+    if not isinstance(scripts, dict):
+        scripts = {}
     if (root / "pnpm-lock.yaml").exists():
         pm, install = "pnpm", "pnpm install"
     elif (root / "yarn.lock").exists():
@@ -175,12 +179,12 @@ def _node(root: Path, win: bool) -> list[Candidate]:
     common = dict(kind="node", tool=pm, deps=install if has_deps else None, deps_marker="node_modules" if has_deps else None)
     out = []
     for name in ("dev", "start", "serve", "preview", "develop"):
-        if name in scripts:
+        if isinstance(scripts.get(name), str) and scripts[name].strip():
             cmd = f"{pm} start" if name == "start" and pm in ("npm", "yarn") else f"{pm} run {name}"
             out.append(Candidate(f"{pm} {'start' if name == 'start' else 'run ' + name}", cmd, notes=[f"runs: {scripts[name]}"], **common))
     if not out:
         main = pkg.get("main")
-        for entry in ([main] if main else []) + ["index.js", "server.js", "app.js", "main.js"]:
+        for entry in ([main] if isinstance(main, str) and main else []) + ["index.js", "server.js", "app.js", "main.js"]:
             if entry and (root / entry).is_file():
                 out.append(Candidate(f"node {entry}", f"node {q(entry)}", **{**common, "tool": "node"}))
                 break
@@ -195,10 +199,15 @@ def _deno(root: Path, win: bool) -> list[Candidate]:
         if (root / name).is_file():
             text = re.sub(r"^\s*//.*$", "", _read(root / name), flags=re.M)
             try:
-                tasks = (json.loads(text).get("tasks") or {})
+                config = json.loads(text)
+                tasks = config.get("tasks") if isinstance(config, dict) else {}
+                if not isinstance(tasks, dict):
+                    tasks = {}
             except ValueError:
                 tasks = {}
-            return [Candidate(f"deno task {t}", f"deno task {t}", "deno", tool="deno") for t in ("dev", "start") if t in tasks]
+            # Deno supports both command strings and task objects (including dependency-only tasks).
+            return [Candidate(f"deno task {t}", f"deno task {t}", "deno", tool="deno") for t in ("dev", "start")
+                    if isinstance(tasks.get(t), dict) or (isinstance(tasks.get(t), str) and tasks[t].strip())]
     return []
 
 

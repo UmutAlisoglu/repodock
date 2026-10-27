@@ -41,6 +41,27 @@ class DetectTests(unittest.TestCase):
         c = self.first({"package.json": json.dumps({"main": "lib/app.js"}), "lib/app.js": ""})
         self.assertEqual(c.command, "node lib/app.js")
 
+    def test_invalid_node_metadata_does_not_hide_other_project_types(self):
+        for value in (None, [], True, 42, "not a package"):
+            with self.subTest(value=value):
+                found = detect(self.repo({"package.json": json.dumps(value), "main.py": "print('hello')"}), "linux")
+                self.assertTrue(any(c.kind == "python" for c in found))
+        for scripts in ([], "dev", 42, {"dev": None}, {"dev": []}, {"dev": "  "}):
+            with self.subTest(scripts=scripts):
+                found = detect(self.repo({"package.json": json.dumps({"scripts": scripts, "main": 42}), "index.js": ""}), "linux")
+                self.assertEqual([c.command for c in found], ["node index.js"])
+
+    def test_invalid_deno_metadata_does_not_hide_other_project_types(self):
+        for value in (None, [], True, {"tasks": []}, {"tasks": 42}, {"tasks": {"dev": None}}):
+            with self.subTest(value=value):
+                found = detect(self.repo({"deno.json": json.dumps(value), "main.py": "print('hello')"}), "linux")
+                self.assertTrue(any(c.kind == "python" for c in found))
+                self.assertFalse(any(c.kind == "deno" for c in found))
+        c = self.first({"deno.json": json.dumps({"tasks": {"dev": {"command": "deno run main.ts"}}})})
+        self.assertEqual(c.command, "deno task dev")
+        c = self.first({"deno.json": json.dumps({"tasks": {"dev": {"dependencies": ["client", "server"]}}})})
+        self.assertEqual(c.command, "deno task dev")
+
     def test_python_entry_with_requirements(self):
         c = self.first({"requirements.txt": "requests\n", "main.py": "print(1)"})
         self.assertEqual(c.command, "{python} main.py")
