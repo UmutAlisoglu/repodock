@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+
+PackageIdentifier: UmutAlisoglu.repodock
+PackageVersion: 0.3.0
+InstallerType: inno
+Scope: user
+InstallModes:
+- interactive
+- silent
+- silentWithProgress
+UpgradeBehavior: install
+ReleaseDate: 2026-10-27
+Installers:
+- Architecture: x64
+  InstallerUrl: https://github.com/UmutAlisoglu/repodock/releases/download/v0.3.0/repodock-setup.exe
+  InstallerSha256: A582C33A1743483CBA529D4F6DEA31E78AF3BD6FC3478FA944D9A3C0F19C950D
+  ProductCode: '{6F3C2B8E-4D1A-4E7B-9C55-2A1D7E0B9F41}_is1'
+ManifestType: installer
+ManifestVersion: 1.6.0
